@@ -541,7 +541,10 @@ class HcnsecProviderAdapterTest {
         val rateLimit = health.snapshot.value.rateLimit
         assertEquals(ProviderValue.Known(100), rateLimit.limitRequests)
         assertEquals("an explicit zero must stay zero", ProviderValue.Known(0), rateLimit.remainingRequests)
-        assertEquals(ProviderValue.Known(30_000L), rateLimit.resetAtMillis)
+        // `x-ratelimit-reset-requests: 30` is a relative duration, so the parser anchors it to the
+        // moment the response was observed (it must not invent an absolute instant).
+        val observedAt = requireNotNull(rateLimit.observedAtMillis) { "observation time must be recorded" }
+        assertEquals(ProviderValue.Known(observedAt + 30_000L), rateLimit.resetAtMillis)
     }
 
     @Test

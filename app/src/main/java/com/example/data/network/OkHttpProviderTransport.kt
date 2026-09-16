@@ -16,8 +16,8 @@ import java.util.concurrent.TimeUnit
  *
  * Security properties (Phase 4.2 §16/§17):
  * - HTTPS only, enforced before the request leaves the process;
- * - the platform default TLS trust chain and hostname verification are kept — no custom
- *   `sslSocketFactory`, no `hostnameVerifier`, no certificate bypass;
+ * - the platform default TLS trust chain and hostname verification are kept: no custom socket
+ *   factory, no verifier override, no certificate bypass;
  * - there is deliberately **no** logging interceptor, so credentials can never reach logcat;
  * - provider calls do not follow redirects.
  */

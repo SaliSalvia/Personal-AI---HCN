@@ -94,6 +94,14 @@ jobs:
             grep -aE '^e: |^w: .*error|error: |FAILED|Caused by:|What went wrong|Execution failed for task|expected:|actual:|Unresolved reference|> There were failing tests' build-log.txt 2>/dev/null | head -120 || echo "(no matching error lines captured)"
             echo '```'
             echo ""
+            echo "**Failing assertions**"
+            echo ""
+            echo '```'
+            # The JUnit XML reports carry the assertion messages; job logs are not always reachable.
+            awk 'match($0, /testcase name="[^"]+"/) { name = substr($0, RSTART + 15, RLENGTH - 16) } /<failure/ { msg = $0; sub(/.*message="/, "", msg); sub(/".*/, "", msg); print "- " name "\n    " msg }' \
+              app/build/test-results/testDebugUnitTest/*.xml 2>/dev/null | head -60 || true
+            echo '```'
+            echo ""
             echo "_Full logs: see the run link above (Summary → Run unit tests)._"
           } > excerpt.md
           sed -i 's/^/CI :: /' /dev/null 2>/dev/null || true

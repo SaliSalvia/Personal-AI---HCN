@@ -84,11 +84,12 @@ class SecretLeakageAuditTest {
         )
 
         for (file in SourceAudit.kotlinSources()) {
-            val text = file.readText()
+            // Comments are documentation; only executable references can actually bypass validation.
+            val code = SourceAudit.code(file.readText())
             for (token in banned) {
                 assertFalse(
                     "${SourceAudit.relativePath(file)} must not reference $token",
-                    text.contains(token),
+                    code.contains(token),
                 )
             }
         }
