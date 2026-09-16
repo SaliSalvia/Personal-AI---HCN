@@ -108,6 +108,7 @@ jobs:
             echo "no open PR for this branch; excerpt follows"
             cat excerpt.md
           fi
+      - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
