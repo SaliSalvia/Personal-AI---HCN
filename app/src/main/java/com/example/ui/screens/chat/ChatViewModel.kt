@@ -75,7 +75,18 @@ class ChatViewModel(
     private var messagesObservationJob: Job? = null
     private var draftSaveJob: Job? = null
 
-    init {
+    // NOTE (Phase 4.2 §14): there is deliberately no init-time model refresh here. Opening the app
+    // must not contact the provider: the model catalogue is fetched only from user-triggered
+    // entry points (see refreshModelsIfNeeded), and chats are sent only when the user sends one.
+
+    /**
+     * Refreshes the HCNSEC model catalogue on demand — safe to call from user-driven UI events.
+     *
+     * Skips the request when a catalogue is already cached, so repeatedly opening the model
+     * selector does not produce repeated traffic.
+     */
+    fun refreshModelsIfNeeded() {
+        if (modelRepository.apiModels.value.isNotEmpty()) return
         viewModelScope.launch {
             modelRepository.refreshModels()
         }

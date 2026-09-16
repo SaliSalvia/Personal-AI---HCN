@@ -64,6 +64,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.api.hcnsec.HcnsecProviderConfig
+import com.example.domain.provider.CircuitState
+import com.example.domain.provider.ProviderHealthState
+import com.example.domain.provider.ProviderStatus
+import com.example.domain.provider.displayText
+import com.example.domain.provider.isKnown
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -85,7 +91,7 @@ fun SettingsScreen(
     val isAutoRouting by viewModel.isAutoRouting.collectAsState()
     val defaultModel by viewModel.defaultModel.collectAsState()
     val testState by viewModel.testState.collectAsState()
-    val accountUsage by viewModel.accountUsage.collectAsState()
+    val providerStatus by viewModel.providerStatus.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
 
     var showChangeKeyDialog by remember { mutableStateOf(false) }
@@ -199,11 +205,11 @@ fun SettingsScreen(
                                     strokeWidth = 2.dp
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Pinging https://api.hcnsec.cn/v1...", color = VioletLight, fontSize = 12.sp)
+                                Text("Testing HCNSEC (POST /chat/completions)...", color = VioletLight, fontSize = 12.sp)
                             }
                         }
                         is ConnectionTestState.Success -> {
-                            val count = (testState as ConnectionTestState.Success).modelCount
+                            val successState = testState as ConnectionTestState.Success
                             Row(
                                 modifier = Modifier
                                     .padding(bottom = 12.dp)
@@ -215,11 +221,20 @@ fun SettingsScreen(
                             ) {
                                 Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SuccessGreen, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Online: verified $count models from HCNSEC.", color = Color(0xFFA7F3D0), fontSize = 12.sp)
+                                Text(
+                                    text = buildString {
+                                        append("Online: HCNSEC responded")
+                                        successState.model?.let { append(" using $it") }
+                                        successState.latencyMillis?.let { append(" in $it ms") }
+                                        append(".")
+                                    },
+                                    color = Color(0xFFA7F3D0),
+                                    fontSize = 12.sp
+                                )
                             }
                         }
                         is ConnectionTestState.Error -> {
-                            val msg = (testState as ConnectionTestState.Error).message
+                            val errorState = testState as ConnectionTestState.Error
                             Row(
                                 modifier = Modifier
                                     .padding(bottom = 12.dp)
@@ -231,7 +246,16 @@ fun SettingsScreen(
                             ) {
                                 Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text(msg, color = Color(0xFFFCA5A5), fontSize = 12.sp)
+                                Column {
+                                    Text(errorState.message, color = Color(0xFFFCA5A5), fontSize = 12.sp)
+                                    errorState.errorKind?.let { kind ->
+                                        Text(
+                                            text = "Category: ${kind.name.lowercase().replace('_', ' ')}",
+                                            color = TextSecondary,
+                                            fontSize = 10.sp
+                                        )
+                                    }
+                                }
                             }
                         }
                         else -> {}
@@ -366,30 +390,89 @@ fun SettingsScreen(
                 color = DarkSurface
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    if (accountUsage != null && accountUsage?.totalAvailable != null) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Available Balance", color = TextSecondary, fontSize = 13.sp)
-                            Text(
-                                text = "${accountUsage?.totalAvailable} ${accountUsage?.currency ?: "CNY"}",
-                                color = SuccessGreen,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    } else {
+                    val status = providerStatus
+
+                    if (status == null) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
-                                text = "Official usage balance endpoint is not published by the current HCNSEC server configuration. Token counts are recorded during active sessions.",
+                                text = "No provider is registered in this build.",
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 lineHeight = 15.sp
                             )
                         }
+                    } else {
+                        ProviderStatusRow(label = "Provider", value = status.displayName)
+                        ProviderStatusRow(
+                            label = "Configuration",
+                            value = if (status.configured) "Configured" else "Not configured",
+                            valueColor = if (status.configured) SuccessGreen else TextSecondary
+                        )
+                        ProviderStatusRow(
+                            label = "Enabled",
+                            value = if (status.enabled) "Enabled" else "Disabled",
+                            valueColor = if (status.enabled) TextPrimary else TextSecondary
+                        )
+                        ProviderStatusRow(
+                            label = "Health",
+                            value = healthLabel(status.health),
+                            valueColor = healthColor(status.health)
+                        )
+                        ProviderStatusRow(
+                            label = "Circuit breaker",
+                            value = circuitLabel(status.circuitState),
+                            valueColor = circuitColor(status.circuitState)
+                        )
+                        ProviderStatusRow(
+                            label = "Model",
+                            value = status.configuredModel ?: "Auto routing (no fixed model)",
+                            monospace = status.configuredModel != null
+                        )
+                        ProviderStatusRow(
+                            label = "Known models",
+                            value = if (status.models.isEmpty()) "Not fetched yet" else status.models.size.toString()
+                        )
+                        ProviderStatusRow(
+                            label = "Quota",
+                            value = if (status.quota.exhausted) {
+                                "Exhausted (reported by HCNSEC)"
+                            } else if (status.quota.remaining.isKnown) {
+                                "Remaining ${status.quota.remaining.displayText()}"
+                            } else {
+                                "unknown"
+                            },
+                            valueColor = if (status.quota.exhausted) ErrorRed else TextSecondary
+                        )
+                        ProviderStatusRow(
+                            label = "Rate limits",
+                            value = "limit ${status.rateLimit.limitRequests.displayText()}, remaining ${status.rateLimit.remainingRequests.displayText()}"
+                        )
+                        ProviderStatusRow(
+                            label = "Last latency",
+                            value = status.lastLatencyMillis?.let { "$it ms" } ?: "unknown"
+                        )
+                        status.lastErrorMessage?.let { message ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Info, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(14.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = message,
+                                    color = Color(0xFFFCA5A5),
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "HCNSEC does not publish a documented balance endpoint, so quota and rate-limit figures are only shown when the API actually reports them. Unknown is never displayed as zero.",
+                            color = TextSecondary,
+                            fontSize = 10.sp,
+                            lineHeight = 14.sp
+                        )
                     }
                 }
             }
@@ -422,7 +505,7 @@ fun SettingsScreen(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "• Zero external AI providers (no OpenAI, Gemini, Anthropic, or third parties).\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Base URL is permanently bound to https://api.hcnsec.cn/v1.",
+                        text = "• Only the configured HCNSEC endpoint receives requests (no OpenAI, Gemini, Anthropic or other third parties).\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Base URL is permanently bound to ${HcnsecProviderConfig.DEFAULT_BASE_URL}.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -533,4 +616,61 @@ fun SettingsScreen(
             containerColor = DarkSurface
         )
     }
+}
+
+
+@Composable
+private fun ProviderStatusRow(
+    label: String,
+    value: String,
+    valueColor: Color = TextPrimary,
+    monospace: Boolean = false
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, color = TextSecondary, fontSize = 12.sp)
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = value,
+            color = valueColor,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            fontFamily = if (monospace) FontFamily.Monospace else FontFamily.Default
+        )
+    }
+}
+
+private fun healthLabel(state: ProviderHealthState): String = when (state) {
+    ProviderHealthState.UNKNOWN -> "Unknown"
+    ProviderHealthState.AVAILABLE -> "Available"
+    ProviderHealthState.DEGRADED -> "Degraded"
+    ProviderHealthState.NETWORK_ERROR -> "Network error"
+    ProviderHealthState.RATE_LIMITED -> "Rate limited"
+    ProviderHealthState.QUOTA_EXHAUSTED -> "Quota exhausted"
+    ProviderHealthState.AUTH_ERROR -> "Authentication error"
+    ProviderHealthState.DISABLED -> "Disabled"
+}
+
+private fun healthColor(state: ProviderHealthState): Color = when (state) {
+    ProviderHealthState.AVAILABLE -> SuccessGreen
+    ProviderHealthState.UNKNOWN -> TextSecondary
+    ProviderHealthState.DISABLED -> TextSecondary
+    else -> ErrorRed
+}
+
+private fun circuitLabel(state: CircuitState): String = when (state) {
+    CircuitState.CLOSED -> "Closed (healthy)"
+    CircuitState.OPEN -> "Open (paused)"
+    CircuitState.HALF_OPEN -> "Half-open (probing)"
+}
+
+private fun circuitColor(state: CircuitState): Color = when (state) {
+    CircuitState.CLOSED -> SuccessGreen
+    CircuitState.HALF_OPEN -> VioletLight
+    CircuitState.OPEN -> ErrorRed
 }

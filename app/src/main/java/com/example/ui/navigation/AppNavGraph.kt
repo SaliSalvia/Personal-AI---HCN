@@ -38,7 +38,7 @@ fun AppNavGraph(
             val onboardingViewModel: OnboardingViewModel = viewModel(
                 factory = OnboardingViewModel.Factory(
                     apiKeyRepository = appContainer.apiKeyRepository,
-                    apiClient = appContainer.apiClient,
+                    providerGateway = appContainer.hcnsecGateway,
                     modelRepository = appContainer.modelRepository
                 )
             )
@@ -125,7 +125,7 @@ fun AppNavGraph(
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.Factory(
                     apiKeyRepository = appContainer.apiKeyRepository,
-                    apiClient = appContainer.apiClient,
+                    providerGateway = appContainer.hcnsecGateway,
                     modelRepository = appContainer.modelRepository
                 )
             )

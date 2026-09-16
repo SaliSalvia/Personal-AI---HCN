@@ -1,8 +1,6 @@
 package com.example.data.repository
 
-import com.example.data.api.ChatMessageDto
-import com.example.data.api.HcnsecApiClient
-import com.example.data.api.StreamEvent
+import com.example.data.api.hcnsec.HcnsecProviderGateway
 import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.MessageDao
 import com.example.data.local.entity.ConversationEntity
@@ -13,6 +11,10 @@ import com.example.domain.model.AttachmentItem
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.TraceStep
 import com.example.domain.model.TraceStepStatus
+import com.example.domain.provider.ProviderChatRequest
+import com.example.domain.provider.ProviderMessage
+import com.example.domain.provider.ProviderRole
+import com.example.domain.provider.ProviderStreamEvent
 import com.example.domain.router.AutoModelRouter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +29,7 @@ import java.util.UUID
 class ChatRepository(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
-    private val apiClient: HcnsecApiClient,
+    private val providerGateway: HcnsecProviderGateway,
     private val modelRouter: AutoModelRouter,
     private val zipWorkspaceManager: ZipWorkspaceManager
 ) {
@@ -193,21 +195,31 @@ class ChatRepository(
 
         // Fetch conversation history
         val history = messageDao.getMessagesSnapshot(conversationId).takeLast(12)
-        val apiMessages = mutableListOf<ChatMessageDto>()
+        val providerMessages = mutableListOf<ProviderMessage>()
 
         // System prompt
-        apiMessages.add(
-            ChatMessageDto(
-                role = "system",
+        providerMessages.add(
+            ProviderMessage(
+                role = ProviderRole.SYSTEM,
                 content = "You are SALi-HCNSEC, a production-quality personal AI Agent powered exclusively by HCNSEC. Provide accurate, clean, structured responses with clear markdown and syntax-highlighted code blocks."
             )
         )
 
         for (msg in history) {
             if (msg.id == userMsgId && additionalContext.isNotEmpty()) {
-                apiMessages.add(ChatMessageDto(role = msg.role, content = msg.content + additionalContext.toString()))
+                providerMessages.add(
+                    ProviderMessage(
+                        role = ProviderRole.fromWireName(msg.role),
+                        content = msg.content + additionalContext.toString()
+                    )
+                )
             } else {
-                apiMessages.add(ChatMessageDto(role = msg.role, content = msg.content))
+                providerMessages.add(
+                    ProviderMessage(
+                        role = ProviderRole.fromWireName(msg.role),
+                        content = msg.content
+                    )
+                )
             }
         }
 
@@ -236,12 +248,17 @@ class ChatRepository(
         }
 
         try {
-            apiClient.streamChatCompletion(
-                model = resolvedModelId,
-                messages = apiMessages
+            providerGateway.streamChat(
+                ProviderChatRequest(
+                    model = resolvedModelId,
+                    messages = providerMessages,
+                    // Preserves the previous default sampling temperature for chat.
+                    temperature = 0.7,
+                    stream = true
+                )
             ).collect { event ->
                 when (event) {
-                    is StreamEvent.Content -> {
+                    is ProviderStreamEvent.Content -> {
                         var text = event.text
                         if (!isInsideThinkTag && text.contains("<think>")) {
                             val thinkIndex = text.indexOf("<think>")
@@ -285,18 +302,18 @@ class ChatRepository(
                         }
                         periodicAutoSave()
                     }
-                    is StreamEvent.Reasoning -> {
+                    is ProviderStreamEvent.Reasoning -> {
                         updateTraceStep(steps, "step_stream", TraceStepStatus.RUNNING, "Deep reasoning & analysis (DeepSeek-R1)...")
-                        fullReasoningContent = (fullReasoningContent ?: "") + event.reasoningText
-                        onChunkReceived("", event.reasoningText)
+                        fullReasoningContent = (fullReasoningContent ?: "") + event.text
+                        onChunkReceived("", event.text)
                         periodicAutoSave()
                     }
-                    is StreamEvent.Completed -> {
+                    is ProviderStreamEvent.Completed -> {
                         updateTraceStep(steps, "step_stream", TraceStepStatus.COMPLETED, "Completed successfully")
                     }
-                    is StreamEvent.Error -> {
-                        updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, event.message)
-                        onError(event.message)
+                    is ProviderStreamEvent.Failed -> {
+                        updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, event.error.message)
+                        onError(event.error.message)
                     }
                 }
             }

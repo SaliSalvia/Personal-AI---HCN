@@ -2,36 +2,50 @@ name: Build Android APK
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "arena/**"]
   pull_request:
     branches: ["main", "master"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Debug APK and run unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      # JDK 21 is required by Robolectric 4.16 to emulate SDK 36; app bytecode stays Java 11.
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: "21"
           distribution: "temurin"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 36
+      - name: Install Android SDK packages
+        shell: bash
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          set -x
+          SDKMANAGER="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          # AGP resolves the 36.1 minor platform on its own; pre-fetch it when possible.
+          "$SDKMANAGER" --install "platforms;android-36.1" || true
 
+      # This repository ships no gradle wrapper jar, so Gradle is provisioned explicitly at the
+      # version pinned in gradle/wrapper/gradle-wrapper.properties.
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "9.3.1"
 
       - name: Prepare Environment
         run: |
@@ -56,8 +70,98 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Run unit tests
+        shell: bash
+        run: |
+          set -o pipefail
+          gradle :app:testDebugUnitTest --stacktrace 2>&1 | tee build-log.txt
+
+      # Job logs live in blob storage, which reviewers and tooling do not always reach: publish a
+      # short, redacted summary (test totals always, compiler/test errors on failure) to the PR.
+      - name: Publish CI summary
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          # This shell runs with `-eo pipefail`; a helper keeps "no matches" (grep exit 1) from
+          # aborting a summary of a *passing* test run.
+          set -u
+          trap 'echo "::error::CI summary aborted at line $LINENO (exit $?)"' ERR
+          PR=$(gh pr list --head "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' || true)
+          results=app/build/test-results/testDebugUnitTest
+          total=0; failures=0; errors=0; skipped=0
+          count_matches() {
+            { grep -ah -o "$1" "$results"/*.xml 2>/dev/null || true; } | awk 'END { print NR }'
+          }
+          if compgen -G "$results/*.xml" > /dev/null; then
+            total=$(count_matches '<testcase ')
+            failures=$(count_matches '<failure')
+            errors=$(count_matches '<error')
+            skipped=$(count_matches '<skipped')
+          fi
+          {
+            echo "### CI summary"
+            echo ""
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (commit \`${GITHUB_SHA:0:8}\`)"
+            echo ""
+            echo "| unit tests | failures | errors | skipped | job |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "| $total | $failures | $errors | $skipped | $JOB_STATUS |"
+            if [ "$JOB_STATUS" = "failure" ]; then
+              echo ""
+              echo "**Failure excerpt**"
+              echo ""
+              echo '```'
+              grep -aE '^e: |error: |FAILED|Caused by:|What went wrong|Execution failed for task|Unresolved reference|> There were failing tests' build-log.txt 2>/dev/null | head -80 || echo "(no matching error lines captured)"
+              echo '```'
+              echo ""
+              echo "**Failing assertions**"
+              echo ""
+              echo '```'
+              awk 'match($0, /testcase name="[^"]+"/) { name = substr($0, RSTART + 15, RLENGTH - 16) } /<failure/ { msg = $0; sub(/.*message="/, "", msg); sub(/".*/, "", msg); print "- " name "\n    " msg }' "$results"/*.xml 2>/dev/null | head -50 || true
+              echo '```'
+            fi
+          } > summary.md
+          # Never publish credential-shaped strings, even from a failing assertion message.
+          sed -i -E 's/sk-[A-Za-z0-9_-]{8,}/<redacted>/g; s/[A-Za-z0-9_-]{40,}/<redacted>/g' summary.md
+          publish() {
+            local out
+            if out=$(gh pr comment "$PR" --body-file summary.md 2>&1); then
+              echo "posted CI summary to PR #$PR"
+            elif out=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@summary.md 2>&1); then
+              echo "updated CI summary comment $CID"
+            else
+              # Diagnostics must stay readable: job logs are not always reachable.
+              echo "::error::could not publish the CI summary: $(printf '%s' "$out" | head -3 | tr '\n' ' ')"
+              printf '%s\n' "$(cat summary.md)"
+            fi
+          }
+
+          CID=""
+          if [ -n "$PR" ]; then
+            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("### CI summary")) | .id' 2>/dev/null | tail -1)
+            CID=${CID:-}
+            publish
+          else
+            echo "no open PR for this branch"
+            cat summary.md
+          fi
+          exit 0
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/test-results/testDebugUnitTest
+          retention-days: 14
+
       - name: Build APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
