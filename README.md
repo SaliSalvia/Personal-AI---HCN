@@ -14,6 +14,50 @@ Personal AI Assistant powered exclusively by your **HCNSEC API** (`https://api.h
 
 ---
 
+## 🧩 Provider Architecture (Phase 4.2 — HCNSEC)
+
+HCNSEC is integrated through a provider-neutral architecture rather than a bespoke client:
+
+```
+UI → repositories → HcnsecProviderGateway → ProviderRegistry → HcnsecProviderAdapter → HTTPS → api.hcnsec.cn
+```
+
+- **Single source of truth** — `ProviderRegistry` owns provider identity, enabled/configured state,
+  capability metadata, health and circuit-breaker state.
+- **Credential boundary** — provider code depends on `ProviderCredentialSource`; only
+  `KeystoreManager`/`ApiKeyRepository` touch Android secure storage. Credentials are never logged,
+  never placed in URLs, UI state, errors or snapshots.
+- **Normalized errors** — authentication, invalid request, unavailable model, rate limit, quota
+  exhaustion, timeout, network, server, malformed response, cancellation and unknown are distinct and
+  never conflated.
+- **Health + circuit breaker** — real outcomes drive `AVAILABLE`/`DEGRADED`/`NETWORK_ERROR`/
+  `RATE_LIMITED`/`QUOTA_EXHAUSTED`/`AUTH_ERROR`/`DISABLED`, and repeated transient failures open a
+  CLOSED/OPEN/HALF_OPEN circuit breaker. Authentication failures and quota exhaustion never open it.
+- **Quota honesty** — UNKNOWN is modelled separately from ZERO; nothing is fabricated. The previous
+  undocumented billing call has been removed.
+- **No startup traffic** — opening the app or a screen never contacts the API; "Test Connection" is
+  user-triggered with a strict timeout, and streaming is fully cancellable.
+- **Streaming** — incremental deltas only, single completion event, normalized mid-stream errors, no
+  duplicate final text.
+
+Later-phase providers (Gemini, Groq, Mistral, You.com) are registered as reserved, disabled slots
+without adapters. MCP, agents, sandboxes and file/research/memory engines are **not** part of this
+phase.
+
+📄 Documentation: [`AI_CONTEXT.md`](AI_CONTEXT.md) · [`docs/PHASE_4_2_HCNSEC.md`](docs/PHASE_4_2_HCNSEC.md)
+
+### Verification
+
+CI (`.github/workflows/build-apk.yml`) runs the unit tests and builds the debug APK.
+Stage 4.2 shipped 130 new deterministic tests (fake transports, no network, no real credentials)
+alongside the 10 pre-existing tests.
+
+> **Live HCNSEC smoke test: NOT PERFORMED — NO SAFE CREDENTIAL AVAILABLE.** Request/response/error
+> handling is verified structurally against fakes only; see the limitations section of
+> `docs/PHASE_4_2_HCNSEC.md`. No claim of a real API call is made.
+
+---
+
 ## 🚀 Building the APK
 
 ### Method 1: Direct Build via Google AI Studio

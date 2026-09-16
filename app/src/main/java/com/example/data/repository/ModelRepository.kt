@@ -1,9 +1,8 @@
 package com.example.data.repository
 
-import com.example.data.api.HcnsecApiClient
+import com.example.data.api.hcnsec.HcnsecProviderGateway
 import com.example.data.local.dao.CustomModelDao
 import com.example.data.local.entity.CustomModelEntity
-import com.example.data.security.ApiKeyRepository
 import com.example.domain.model.AiModel
 import com.example.domain.router.CapabilityRegistry
 import kotlinx.coroutines.Dispatchers
@@ -14,9 +13,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 
 class ModelRepository(
-    private val apiClient: HcnsecApiClient,
-    private val customModelDao: CustomModelDao,
-    private val apiKeyRepository: ApiKeyRepository
+    private val providerGateway: HcnsecProviderGateway,
+    private val customModelDao: CustomModelDao
 ) {
     private val _apiModels = MutableStateFlow<List<AiModel>>(emptyList())
     val apiModels = _apiModels.asStateFlow()
@@ -52,30 +50,19 @@ class ModelRepository(
     }
 
     suspend fun refreshModels(): Result<List<AiModel>> = withContext(Dispatchers.IO) {
-        if (!apiKeyRepository.hasApiKey()) {
-            return@withContext Result.failure(Exception("No HCNSEC API Key configured"))
+        if (!providerGateway.isConfigured()) {
+            return@withContext Result.failure(Exception("No HCNSEC API key is configured"))
         }
 
         _isLoading.value = true
         _errorMessage.value = null
 
-        val result = apiClient.getModels()
+        val result = providerGateway.listModels()
         _isLoading.value = false
 
         result.fold(
-            onSuccess = { dtoList ->
-                val models = dtoList.map { dto ->
-                    AiModel(
-                        id = dto.id,
-                        displayName = dto.id,
-                        isCustom = false,
-                        isFavorite = false,
-                        capabilities = CapabilityRegistry.detectCapabilities(dto.id),
-                        description = "Official HCNSEC model (${dto.ownedBy ?: "hcnsec"})"
-                    )
-                }.sortedBy { it.displayName }
-
-                _apiModels.value = models
+            onSuccess = { models ->
+                _apiModels.value = models.sortedBy { it.displayName }
                 Result.success(models)
             },
             onFailure = { err ->

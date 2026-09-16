@@ -2,36 +2,45 @@ name: Build Android APK
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "arena/**"]
   pull_request:
     branches: ["main", "master"]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Debug APK and run unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      # JDK 21 is required by Robolectric 4.16 to emulate SDK 36; app bytecode stays Java 11.
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: "17"
+          java-version: "21"
           distribution: "temurin"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 36
+      - name: Install Android SDK packages
+        shell: bash
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          set -x
+          SDKMANAGER="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          # AGP resolves the 36.1 minor platform on its own; pre-fetch it when possible.
+          "$SDKMANAGER" --install "platforms;android-36.1" || true
 
+      # This repository ships no gradle wrapper jar, so Gradle is provisioned explicitly at the
+      # version pinned in gradle/wrapper/gradle-wrapper.properties.
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "9.3.1"
 
       - name: Prepare Environment
         run: |
@@ -56,8 +65,21 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
+      - name: Run unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/test-results/testDebugUnitTest
+          retention-days: 14
+
       - name: Build APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+        run: gradle :app:assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

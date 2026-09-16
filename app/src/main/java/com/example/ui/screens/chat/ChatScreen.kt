@@ -400,7 +400,11 @@ fun ChatScreen(
                     onInputChanged = { viewModel.onInputChanged(it) },
                     isGenerating = isGenerating,
                     selectedModelDisplay = if (selectedModelId == "auto") "Auto (Optimal)" else selectedModelId,
-                    onOpenModelSelector = { showModelSheet = true },
+                    onOpenModelSelector = {
+                        showModelSheet = true
+                        // User-triggered refresh only (no provider call on app open).
+                        viewModel.refreshModelsIfNeeded()
+                    },
                     onAttachFile = { genericFileLauncher.launch("*/*") },
                     onAttachZip = { zipLauncher.launch("application/zip") },
                     onSend = { viewModel.sendMessage() },

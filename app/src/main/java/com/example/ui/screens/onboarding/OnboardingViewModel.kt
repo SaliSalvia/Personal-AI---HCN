@@ -3,7 +3,7 @@ package com.example.ui.screens.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.data.api.HcnsecApiClient
+import com.example.data.api.hcnsec.HcnsecProviderGateway
 import com.example.data.repository.ModelRepository
 import com.example.data.security.ApiKeyRepository
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,15 +11,22 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 sealed class OnboardingValidationState {
-    object Idle : OnboardingValidationState()
-    object Validating : OnboardingValidationState()
+    data object Idle : OnboardingValidationState()
+    data object Validating : OnboardingValidationState()
     data class Success(val modelCount: Int) : OnboardingValidationState()
     data class Error(val message: String) : OnboardingValidationState()
 }
 
+/**
+ * First-run credential onboarding.
+ *
+ * The typed credential is validated through the provider registry/gateway (never by talking to
+ * HTTP from the UI layer), stored through the hardware-backed credential repository, and dropped
+ * from UI state as soon as it has been stored.
+ */
 class OnboardingViewModel(
     private val apiKeyRepository: ApiKeyRepository,
-    private val apiClient: HcnsecApiClient,
+    private val providerGateway: HcnsecProviderGateway,
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
@@ -36,9 +43,9 @@ class OnboardingViewModel(
         }
     }
 
-    fun validateAndConnect(onSuccess: () -> Unit) {
-        val key = _apiKeyInput.value.trim()
-        if (key.isEmpty()) {
+    fun validateAndConnect(onConnected: () -> Unit) {
+        val candidateKey = _apiKeyInput.value.trim()
+        if (candidateKey.isEmpty()) {
             _validationState.value = OnboardingValidationState.Error("Please enter your HCNSEC API key")
             return
         }
@@ -46,15 +53,21 @@ class OnboardingViewModel(
         viewModelScope.launch {
             _validationState.value = OnboardingValidationState.Validating
 
-            val result = apiClient.validateApiKey(key)
-            result.fold(
+            // Validated as an ephemeral credential: it is held in memory for this call only and is
+            // never logged, persisted or attached to an error.
+            providerGateway.verifyEphemeralCredential(candidateKey).fold(
                 onSuccess = { models ->
-                    // Securely save via Android Keystore
-                    apiKeyRepository.saveApiKey(key)
-                    // Fetch models to cache
-                    modelRepository.refreshModels()
-                    _validationState.value = OnboardingValidationState.Success(models.size)
-                    onSuccess()
+                    if (!apiKeyRepository.saveApiKey(candidateKey)) {
+                        _validationState.value = OnboardingValidationState.Error(
+                            "The key is valid but could not be stored securely on this device, so nothing was saved."
+                        )
+                    } else {
+                        // The credential now lives in secure storage only.
+                        _apiKeyInput.value = ""
+                        modelRepository.refreshModels()
+                        _validationState.value = OnboardingValidationState.Success(models.size)
+                        onConnected()
+                    }
                 },
                 onFailure = { error ->
                     _validationState.value = OnboardingValidationState.Error(
@@ -67,12 +80,12 @@ class OnboardingViewModel(
 
     class Factory(
         private val apiKeyRepository: ApiKeyRepository,
-        private val apiClient: HcnsecApiClient,
+        private val providerGateway: HcnsecProviderGateway,
         private val modelRepository: ModelRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return OnboardingViewModel(apiKeyRepository, apiClient, modelRepository) as T
+            return OnboardingViewModel(apiKeyRepository, providerGateway, modelRepository) as T
         }
     }
 }

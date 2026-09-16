@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.api.hcnsec.HcnsecProviderConfig
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -415,7 +416,7 @@ fun OnboardingScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Encrypted at rest with Android Keystore. Keys are never logged and are sent only to api.hcnsec.cn.",
+                    text = "Encrypted at rest with Android Keystore. Keys are never logged and are sent only to the HCNSEC endpoint (${HcnsecProviderConfig.DEFAULT_BASE_URL}).",
                     color = TextSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp
