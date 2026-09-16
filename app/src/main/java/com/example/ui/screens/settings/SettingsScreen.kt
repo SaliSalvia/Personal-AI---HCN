@@ -505,7 +505,7 @@ fun SettingsScreen(
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "• Zero external AI providers (no OpenAI, Gemini, Anthropic, or third parties).\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Base URL is permanently bound to ${HcnsecProviderConfig.DEFAULT_BASE_URL}.",
+                        text = "• Only the configured HCNSEC endpoint receives requests (no OpenAI, Gemini, Anthropic or other third parties).\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Base URL is permanently bound to ${HcnsecProviderConfig.DEFAULT_BASE_URL}.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
