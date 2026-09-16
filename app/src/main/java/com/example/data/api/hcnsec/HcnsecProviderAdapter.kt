@@ -124,7 +124,7 @@ class HcnsecProviderAdapter(
     override suspend fun chat(request: ProviderChatRequest): ProviderChatResponse =
         withContext(Dispatchers.IO) {
             val credential = resolveCredential()
-                ?: throw record(ProviderErrors.notConfigured(id, "no credential is configured."))
+                ?: throw fail(ProviderErrors.notConfigured(id, "no credential is configured."))
 
             if (!circuitBreaker.allowRequest()) {
                 throw ProviderException(ProviderErrors.circuitOpen(id))
@@ -143,13 +143,13 @@ class HcnsecProviderAdapter(
                 circuitBreaker.abandonProbe()
                 throw e
             } catch (e: IOException) {
-                throw record(mapTransportError(e))
+                throw fail(mapTransportError(e))
             }
 
             val rateLimit = ProviderRateLimitParser.fromHeaders(response.headers, clock())
 
             if (response.statusCode !in 200..299) {
-                throw record(mapErrorResponse(response.statusCode, response.body), rateLimit)
+                throw fail(mapErrorResponse(response.statusCode, response.body), rateLimit)
             }
 
             val parsed = parseChatResponse(response.body, response.latencyMillis, rateLimit)
@@ -165,7 +165,7 @@ class HcnsecProviderAdapter(
         rateLimit: ProviderRateLimitSnapshot,
     ): ProviderChatResponse {
         val envelope = runCatching { responseAdapter.fromJson(body) }.getOrNull()
-            ?: throw record(
+            ?: throw fail(
                 ProviderErrors.malformedResponse("HCNSEC returned a response that could not be parsed."),
                 rateLimit,
             )
@@ -174,17 +174,17 @@ class HcnsecProviderAdapter(
         // instead of reporting an empty completion.
         val errorDetail = runCatching { errorAdapter.fromJson(body) }.getOrNull()?.error
         if (errorDetail != null && envelope.choices.isNullOrEmpty()) {
-            throw record(mapErrorPayload(errorDetail.message, errorDetail.type, errorDetail.code?.toString()), rateLimit)
+            throw fail(mapErrorPayload(errorDetail.message, errorDetail.type, errorDetail.code?.toString()), rateLimit)
         }
 
         val choice = envelope.choices?.firstOrNull()
-            ?: throw record(
+            ?: throw fail(
                 ProviderErrors.malformedResponse("HCNSEC returned no completion choices."),
                 rateLimit,
             )
 
         val message = choice.message
-            ?: throw record(
+            ?: throw fail(
                 ProviderErrors.malformedResponse("HCNSEC returned a choice without a message."),
                 rateLimit,
             )
@@ -206,7 +206,7 @@ class HcnsecProviderAdapter(
     override fun stream(request: ProviderChatRequest): Flow<ProviderStreamEvent> = flow {
         val credential = resolveCredential()
         if (credential == null) {
-            emit(ProviderStreamEvent.Failed(record(ProviderErrors.notConfigured(id, "no credential is configured."))))
+            emit(ProviderStreamEvent.Failed(recordFailure(ProviderErrors.notConfigured(id, "no credential is configured."))))
             return@flow
         }
 
@@ -248,7 +248,7 @@ class HcnsecProviderAdapter(
             if (opened.statusCode !in 200..299) {
                 emit(
                     ProviderStreamEvent.Failed(
-                        record(mapErrorResponse(opened.statusCode, opened.readErrorBody()), rateLimit),
+                        recordFailure(mapErrorResponse(opened.statusCode, opened.readErrorBody()), rateLimit),
                     ),
                 )
                 return@flow
@@ -276,7 +276,7 @@ class HcnsecProviderAdapter(
                     is StreamPayload.Malformed -> malformedChunks += 1
 
                     is StreamPayload.Failure -> {
-                        emit(ProviderStreamEvent.Failed(record(outcome.error, rateLimit)))
+                        emit(ProviderStreamEvent.Failed(recordFailure(outcome.error, rateLimit)))
                         return@flow
                     }
 
@@ -298,7 +298,7 @@ class HcnsecProviderAdapter(
                 if (parsedChunks == 0 && malformedChunks > 0) {
                     emit(
                         ProviderStreamEvent.Failed(
-                            record(
+                            recordFailure(
                                 ProviderErrors.malformedResponse("HCNSEC returned an unreadable stream."),
                                 rateLimit,
                             ),
@@ -324,7 +324,7 @@ class HcnsecProviderAdapter(
                 circuitBreaker.abandonProbe()
                 throw CancellationException("HCNSEC stream cancelled.")
             }
-            emit(ProviderStreamEvent.Failed(record(mapTransportError(e))))
+            emit(ProviderStreamEvent.Failed(recordFailure(mapTransportError(e))))
         } finally {
             cancellationWatch?.dispose()
             runCatching { handle?.close() }
@@ -409,17 +409,17 @@ class HcnsecProviderAdapter(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: IOException) {
-                throw record(mapTransportError(e))
+                throw fail(mapTransportError(e))
             }
 
             val rateLimit = ProviderRateLimitParser.fromHeaders(response.headers, clock())
 
             if (response.statusCode !in 200..299) {
-                throw record(mapErrorResponse(response.statusCode, response.body), rateLimit)
+                throw fail(mapErrorResponse(response.statusCode, response.body), rateLimit)
             }
 
             val parsed = runCatching { modelListAdapter.fromJson(response.body) }.getOrNull()
-                ?: throw record(
+                ?: throw fail(
                     ProviderErrors.malformedResponse("HCNSEC returned an unreadable model list."),
                     rateLimit,
                 )
@@ -506,14 +506,21 @@ class HcnsecProviderAdapter(
     // ---------------------------------------------------------------------------------------
 
     /** Records a failure against health + circuit breaker and returns it for throwing. */
-    private fun record(
+    /** Records a normalized failure and returns it for `ProviderStreamEvent.Failed` emissions. */
+    private fun recordFailure(
         error: ProviderError,
         rateLimit: ProviderRateLimitSnapshot = ProviderRateLimitSnapshot.UNKNOWN,
-    ): ProviderException {
+    ): ProviderError {
         health.recordFailure(error, rateLimit)
         circuitBreaker.recordFailure(error.kind)
-        return ProviderException(error)
+        return error
     }
+
+    /** Records a normalized failure and wraps it for the non-streaming (throwing) path. */
+    private fun fail(
+        error: ProviderError,
+        rateLimit: ProviderRateLimitSnapshot = ProviderRateLimitSnapshot.UNKNOWN,
+    ): ProviderException = ProviderException(recordFailure(error, rateLimit))
 
     private fun mapErrorResponse(status: Int, body: String): ProviderError {
         val detail = runCatching { errorAdapter.fromJson(body) }.getOrNull()?.error
