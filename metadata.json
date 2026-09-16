@@ -1,0 +1,6 @@
+{
+  "name": "Sali-HCNSEC",
+  "description": "Personal AI Agent powered exclusively by your HCNSEC API account.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
