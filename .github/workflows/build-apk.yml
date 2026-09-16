@@ -75,47 +75,62 @@ jobs:
           set -o pipefail
           gradle :app:testDebugUnitTest --stacktrace 2>&1 | tee build-log.txt
 
-      # Job logs are stored in blob storage, so on failure publish a short, secret-free
-      # excerpt of compiler/test errors to the pull request for quick triage.
-      - name: Surface build errors
-        if: failure()
+      # Job logs live in blob storage, which reviewers and tooling do not always reach: publish a
+      # short, redacted summary (test totals always, compiler/test errors on failure) to the PR.
+      - name: Publish CI summary
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
         run: |
           set -u
           PR=$(gh pr list --head "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' || true)
+          results=app/build/test-results/testDebugUnitTest
+          total=0; failures=0; errors=0; skipped=0
+          if compgen -G "$results/*.xml" > /dev/null; then
+            total=$(grep -ah -o '<testcase ' "$results"/*.xml | wc -l | tr -d ' ')
+            failures=$(grep -ah -o '<failure' "$results"/*.xml | wc -l | tr -d ' ')
+            errors=$(grep -ah -o '<error' "$results"/*.xml | wc -l | tr -d ' ')
+            skipped=$(grep -ah -o '<skipped' "$results"/*.xml | wc -l | tr -d ' ')
+          fi
           {
-            echo "### CI failure excerpt"
+            echo "### CI summary"
             echo ""
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (commit \`${GITHUB_SHA:0:8}\`)"
             echo ""
-            echo '```'
-            grep -aE '^e: |^w: .*error|error: |FAILED|Caused by:|What went wrong|Execution failed for task|expected:|actual:|Unresolved reference|> There were failing tests' build-log.txt 2>/dev/null | head -120 || echo "(no matching error lines captured)"
-            echo '```'
-            echo ""
-            echo "**Failing assertions**"
-            echo ""
-            echo '```'
-            # The JUnit XML reports carry the assertion messages; job logs are not always reachable.
-            awk 'match($0, /testcase name="[^"]+"/) { name = substr($0, RSTART + 15, RLENGTH - 16) } /<failure/ { msg = $0; sub(/.*message="/, "", msg); sub(/".*/, "", msg); print "- " name "\n    " msg }' \
-              app/build/test-results/testDebugUnitTest/*.xml 2>/dev/null | head -60 || true
-            echo '```'
-            echo ""
-            echo "_Full logs: see the run link above (Summary → Run unit tests)._"
-          } > excerpt.md
-          sed -i 's/^/CI :: /' /dev/null 2>/dev/null || true
+            echo "| unit tests | failures | errors | skipped | job |"
+            echo "| --- | --- | --- | --- | --- |"
+            echo "| $total | $failures | $errors | $skipped | $JOB_STATUS |"
+            if [ "$JOB_STATUS" = "failure" ]; then
+              echo ""
+              echo "**Failure excerpt**"
+              echo ""
+              echo '```'
+              grep -aE '^e: |error: |FAILED|Caused by:|What went wrong|Execution failed for task|Unresolved reference|> There were failing tests' build-log.txt 2>/dev/null | head -80 || echo "(no matching error lines captured)"
+              echo '```'
+              echo ""
+              echo "**Failing assertions**"
+              echo ""
+              echo '```'
+              awk 'match($0, /testcase name="[^"]+"/) { name = substr($0, RSTART + 15, RLENGTH - 16) } /<failure/ { msg = $0; sub(/.*message="/, "", msg); sub(/".*/, "", msg); print "- " name "\n    " msg }' "$results"/*.xml 2>/dev/null | head -50 || true
+              echo '```'
+            fi
+          } > summary.md
+          # Never publish credential-shaped strings, even from a failing assertion message.
+          sed -i -E 's/sk-[A-Za-z0-9_-]{8,}/<redacted>/g; s/[A-Za-z0-9_-]{40,}/<redacted>/g' summary.md
           if [ -n "$PR" ]; then
-            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("CI failure excerpt")) | .id' 2>/dev/null | tail -1 || true)
+            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("### CI summary")) | .id' 2>/dev/null | tail -1 || true)
             if [ -n "$CID" ]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@excerpt.md > /dev/null && echo "updated comment $CID"
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@summary.md > /dev/null && echo "updated CI summary comment $CID"
             else
-              gh pr comment "$PR" --body-file excerpt.md > /dev/null && echo "posted excerpt to PR #$PR"
+              gh pr comment "$PR" --body-file summary.md > /dev/null && echo "posted CI summary to PR #$PR"
             fi
           else
-            echo "no open PR for this branch; excerpt follows"
-            cat excerpt.md
+            echo "no open PR for this branch"
+            cat summary.md
           fi
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4

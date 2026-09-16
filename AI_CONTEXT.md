@@ -266,11 +266,22 @@ CI (`.github/workflows/build-apk.yml`) provisions JDK 21, the Android SDK and Gr
 repository ships no wrapper jar), then runs the unit tests and builds the debug APK. Test reports are
 uploaded as artifacts.
 
+**CI status: green.** Run
+[35158466504](https://github.com/SaliSalvia/Personal-AI---HCN/actions/runs/35158466504) at commit
+`3550634` completed every step: `:app:testDebugUnitTest` passed with no failures and
+`:app:assembleDebug` produced the debug APK (`Personal-AI-Debug-APK` artifact). The workflow publishes
+a per-commit **CI summary** comment on the pull request (test totals always; failing assertions and
+compiler errors on failure), because job logs are not always reachable from tooling.
+
+No coverage plugin (JaCoCo/Kover) is configured in this repository, so there is no coverage threshold
+to reduce or compare — the test count is the only quantitative gate, and it grew from 10 to 140.
+
 ---
 
 ## 13. Tests
 
 140 unit tests total: **130 new** provider/HCNSEC/security tests plus the 10 pre-existing tests.
+All 140 execute in `:app:testDebugUnitTest` in CI (`gradle :app:testDebugUnitTest`, Robolectric included).
 
 | Suite | Tests | Covers |
 | --- | --- | --- |

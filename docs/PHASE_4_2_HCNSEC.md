@@ -90,7 +90,31 @@ Tests (130 new): `HcnsecProviderAdapterTest` (45), `ProviderHealthTrackerTest` (
 ## 5. Verification
 
 Executed in CI (JDK 21 + Android SDK + Gradle 9.3.1): `:app:testDebugUnitTest` (all 140 tests) and
-`:app:assembleDebug`. See the pull request checks for the concrete run result.
+`:app:assembleDebug`.
+
+**First green run:**
+[35158466504](https://github.com/SaliSalvia/Personal-AI---HCN/actions/runs/35158466504) at commit
+`3550634` — every step passed and both artifacts (unit-test report, `Personal-AI-Debug-APK`) were
+uploaded. Each later push to this branch re-runs the same gate, and the workflow posts a per-commit
+CI summary (test totals; failing assertions and compiler errors when the build breaks) as a comment on
+the pull request.
+
+**What the first CI rounds caught** — all fixed and re-verified:
+
+1. five stream-failure sites emitted the wrapping `ProviderException` where `ProviderStreamEvent.Failed`
+   requires a `ProviderError`; the recording helper is now split into a returned error and a thrown
+   exception;
+2. the repository-root helper in `SourceAudit` resolved to the module directory, because this Android
+   layout has its own `app/.gitignore` that shadows the root one — it now walks up to
+   `settings.gradle.kts`;
+3. the TLS audit flagged a KDoc comment that *documented* the absence of a TLS bypass; audits now
+   inspect comment-free code (and the comment was reworded);
+4. one rate-limit assertion compared a relative `x-ratelimit-reset-requests` duration against an
+   absolute instant instead of the recorded observation time.
+
+Two initial CI failures were also self-inflicted workflow defects found and fixed before any code
+signal was available: `setup-gradle` was asked to restore a cache it could not, and an inserted step
+briefly absorbed the artifact-upload step's keys (which made the workflow file invalid).
 
 **Not executed in the authoring environment:** this sandbox has no JDK, no Android SDK and no
 Gradle, and network egress is limited to GitHub — Maven Central, `dl.google.com` and
