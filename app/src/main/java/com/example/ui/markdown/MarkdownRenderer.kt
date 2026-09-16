@@ -29,6 +29,13 @@ sealed class MarkdownBlock {
 object MarkdownRenderer {
 
     /**
+     * Pre-compiled once for the whole process. Creating a Regex inside the parsing
+     * loop allocated (and compiled) a new pattern for every single line, which was
+     * the dominant cost while streaming tokens into the markdown renderer.
+     */
+    private val ORDERED_LIST_PATTERN = Regex("^(\\d+)[.)]\\s+(.*)")
+
+    /**
      * Parses markdown text into structured blocks with support for:
      * - Multi-line fenced code blocks with language specifiers
      * - Headers (# ## ### ####)
@@ -147,7 +154,7 @@ object MarkdownRenderer {
             }
 
             // Ordered list items: 1. 2. 10.
-            val orderedMatch = Regex("^(\\d+)[.)]\\s+(.*)").find(trimmed)
+            val orderedMatch = ORDERED_LIST_PATTERN.find(trimmed)
             if (orderedMatch != null) {
                 if (currentUnorderedList.isNotEmpty()) {
                     blocks.add(MarkdownBlock.UnorderedList(currentUnorderedList.toList()))

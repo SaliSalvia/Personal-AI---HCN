@@ -2,7 +2,6 @@ package com.example.data.api
 
 import com.example.data.security.ApiKeyRepository
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -34,9 +33,10 @@ class HcnsecApiClient(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
     }
 
-    private val moshi: Moshi = Moshi.Builder()
-        .addLast(KotlinJsonAdapterFactory())
-        .build()
+    // Every DTO is annotated with @JsonClass(generateAdapter = true), so the KSP
+    // generated adapters are used. The reflection based factory is not needed and
+    // would drag kotlin-reflect (plus its startup cost) into the APK.
+    private val moshi: Moshi = Moshi.Builder().build()
 
     private val authInterceptor = Interceptor { chain ->
         val apiKey = apiKeyRepository.getApiKey() ?: ""

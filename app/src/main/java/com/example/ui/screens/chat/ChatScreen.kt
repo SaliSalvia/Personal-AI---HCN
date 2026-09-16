@@ -90,6 +90,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -107,7 +108,6 @@ fun ChatScreen(
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val activeWorkspaceId by viewModel.activeWorkspaceId.collectAsState()
     val messages by viewModel.messages.collectAsState()
-    val streamingMessage by viewModel.streamingMessage.collectAsState()
     val inputText by viewModel.inputText.collectAsState()
     val isGenerating by viewModel.isGenerating.collectAsState()
     val selectedModelId by viewModel.selectedModelId.collectAsState()
@@ -136,21 +136,26 @@ fun ChatScreen(
         uri?.let { viewModel.attachFileFromUri(context, it) }
     }
 
-    // Auto-scroll smoothly when new messages arrive or stream updates
-    LaunchedEffect(messages.size) {
-        val totalCount = messages.size + (if (streamingMessage != null) 1 else 0)
+    // Jump to the newest entry when a message is added or generation starts.
+    LaunchedEffect(messages.size, isGenerating) {
+        val totalCount = listState.layoutInfo.totalItemsCount
         if (totalCount > 0) {
             listState.animateScrollToItem(totalCount - 1)
         }
     }
 
-    LaunchedEffect(streamingMessage?.reasoningContent?.length, streamingMessage?.content?.length) {
-        if (streamingMessage != null) {
-            val totalCount = messages.size + 1
-            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-            if (lastVisible >= totalCount - 2) {
+    // While an answer streams in, follow the tail on a fixed cadence. Scrolling on
+    // every token re-laid-out the list mid-composition and produced visible jank.
+    LaunchedEffect(isGenerating) {
+        if (!isGenerating) return@LaunchedEffect
+        while (true) {
+            val layoutInfo = listState.layoutInfo
+            val totalCount = layoutInfo.totalItemsCount
+            val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1
+            if (totalCount > 0 && lastVisible >= totalCount - 3) {
                 listState.scrollToItem(totalCount - 1)
             }
+            delay(AUTOSCROLL_INTERVAL_MS)
         }
     }
 
@@ -346,7 +351,7 @@ fun ChatScreen(
 
                 // Chat Messages Content Area
                 Box(modifier = Modifier.weight(1f)) {
-                    if (messages.isEmpty() && streamingMessage == null) {
+                    if (messages.isEmpty() && !isGenerating) {
                         // Empty State View
                         EmptyChatState(
                             onSelectPrompt = { prompt ->
@@ -366,9 +371,9 @@ fun ChatScreen(
                                 MessageItem(message = msg)
                             }
 
-                            if (streamingMessage != null) {
+                            if (isGenerating) {
                                 item(key = "streaming_message") {
-                                    MessageItem(message = streamingMessage!!)
+                                    StreamingMessageItem(viewModel = viewModel)
                                 }
                             }
 
@@ -423,6 +428,22 @@ fun ChatScreen(
             onToggleFavorite = { model -> viewModel.toggleFavoriteModel(model) },
             onDismiss = { showModelSheet = false }
         )
+    }
+}
+
+/** Auto-scroll cadence while a response is streaming. */
+private const val AUTOSCROLL_INTERVAL_MS = 90L
+
+/**
+ * Collects the streaming message inside its own recomposition scope so a token
+ * update only rebuilds the assistant bubble instead of the whole screen
+ * (top bar, drawer, input bar and every other message included).
+ */
+@Composable
+private fun StreamingMessageItem(viewModel: ChatViewModel) {
+    val streamingMessage by viewModel.streamingMessage.collectAsState()
+    streamingMessage?.let { message ->
+        MessageItem(message = message)
     }
 }
 

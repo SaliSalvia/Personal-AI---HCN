@@ -1,6 +1,8 @@
 package com.example.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -23,10 +25,14 @@ fun AppNavGraph(
     appContainer: AppContainer,
     navController: NavHostController = rememberNavController()
 ) {
-    val startDestination = if (appContainer.apiKeyRepository.hasApiKey()) {
-        Screen.Chat.createRoute()
-    } else {
-        Screen.Onboarding.route
+    // Resolved once. hasApiKey() reads SharedPreferences and, on first use, the
+    // hardware backed AndroidKeyStore - it must not run on every recomposition.
+    val startDestination = remember {
+        if (appContainer.apiKeyRepository.hasApiKey()) {
+            Screen.Chat.createRoute()
+        } else {
+            Screen.Onboarding.route
+        }
     }
 
     NavHost(
@@ -81,8 +87,12 @@ fun AppNavGraph(
                 )
             )
 
-            // Trigger init for destination
-            chatViewModel.initConversation(convId, wsId)
+            // Side effects belong in an effect, not in composition: calling this
+            // directly created a brand new conversation on every recomposition of
+            // the chat destination while the first one was still being created.
+            LaunchedEffect(convId, wsId) {
+                chatViewModel.initConversation(convId, wsId)
+            }
 
             ChatScreen(
                 viewModel = chatViewModel,

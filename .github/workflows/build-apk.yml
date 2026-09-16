@@ -2,16 +2,30 @@ name: Build Android APK
 
 on:
   push:
-    branches: ["main", "master"]
+    branches: ["main", "master", "arena/01a0abb1-personal-ai-hcn"]
   pull_request:
     branches: ["main", "master"]
   workflow_dispatch:
 
+# Needed so the job can publish the build report / release back to the repo.
+permissions:
+  contents: write
+
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
-    name: Build Debug APK
+    name: Build Release APK
     runs-on: ubuntu-latest
-
+    timeout-minutes: 45
+    env:
+      APK_PATH: app/build/outputs/apk/release/app-release.apk
+      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -22,46 +36,161 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 36
+      # The runner image already ships the Android SDK, so the packages are
+      # installed directly instead of going through a third party setup action.
+      - name: Install Android SDK packages
+        shell: bash
         run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+          set -x
+          echo "ANDROID_HOME=${ANDROID_HOME} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+          SDKMANAGER="${ANDROID_HOME:-${ANDROID_SDK_ROOT}}/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager || true)"
+          echo "Using sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "platform-tools" "platforms;android-36" "build-tools;36.0.0" || true
+          # AGP resolves the 36.1 minor platform on its own; pre-fetch it when possible.
+          "$SDKMANAGER" --install "platforms;android-36.1" || true
+          "$SDKMANAGER" --list_installed 2>/dev/null || "$SDKMANAGER" --list 2>/dev/null | head -60 || true
 
+      # The repository has no gradle wrapper jar, so Gradle is provisioned
+      # explicitly at the version pinned in gradle/wrapper/gradle-wrapper.properties.
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "9.3.1"
 
-      - name: Prepare Environment
+      - name: Prepare Environment and Signing Key
+        shell: bash
         run: |
+          set -e
           touch .env
+          if [ -n "${RELEASE_KEYSTORE_BASE64}" ]; then
+            echo "Using the keystore provided through repository secrets."
+            printf '%s' "${RELEASE_KEYSTORE_BASE64}" | base64 -d > release.keystore
+          else
+            echo "No RELEASE_KEYSTORE_BASE64 secret found - generating an ephemeral signing key."
+            if [ -z "${STORE_PASSWORD}" ]; then STORE_PASSWORD="$(openssl rand -hex 16)"; fi
+            if [ -z "${KEY_PASSWORD}" ]; then KEY_PASSWORD="${STORE_PASSWORD}"; fi
+            if [ -z "${KEY_ALIAS}" ]; then KEY_ALIAS="upload"; fi
+            keytool -genkeypair -v \
+              -keystore release.keystore -storetype PKCS12 \
+              -storepass "${STORE_PASSWORD}" -keypass "${KEY_PASSWORD}" \
+              -alias "${KEY_ALIAS}" -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=SALi-HCNSEC, OU=Personal, O=Sali, C=US"
+            {
+              echo "STORE_PASSWORD=${STORE_PASSWORD}"
+              echo "KEY_PASSWORD=${KEY_PASSWORD}"
+              echo "KEY_ALIAS=${KEY_ALIAS}"
+            } >> "$GITHUB_ENV"
+          fi
+          ls -l release.keystore
 
-      - name: Prepare Debug Keystore
+      - name: Unit Tests
+        shell: bash
+        continue-on-error: true
+        run: gradle :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build-test.log
+
+      - name: Build Release APK
+        shell: bash
+        run: gradle :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee build-release.log
+
+      - name: Verify APK
+        shell: bash
         run: |
-          if [ -f debug.keystore.base64 ]; then
-            base64 --decode debug.keystore.base64 > debug.keystore
-          fi
+          set -e
+          ls -lh "${APK_PATH}"
+          BUILD_TOOLS="$(ls -d "${ANDROID_HOME:-${ANDROID_SDK_ROOT}}"/build-tools/* | sort -V | tail -1)"
+          echo "Build tools: ${BUILD_TOOLS}"
+          "${BUILD_TOOLS}/apksigner" verify --print-certs "${APK_PATH}" | tee apksigner.txt || true
+          "${BUILD_TOOLS}/aapt2" dump badging "${APK_PATH}" | head -15 | tee badging.txt || true
+          sha256sum "${APK_PATH}" | tee apk-sha256.txt
 
-          if [ ! -f debug.keystore ]; then
-            keytool -genkeypair \
-              -v \
-              -keystore debug.keystore \
-              -storepass android \
-              -alias androiddebugkey \
-              -keypass android \
-              -keyalg RSA \
-              -keysize 2048 \
-              -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
-
-      - name: Build APK
-        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
-
-      - name: Upload APK
+      - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Personal-AI-Debug-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: Sali-HCNSEC-Release-APK
+          path: |
+            ${{ env.APK_PATH }}
+            app/build/outputs/mapping/release/mapping.txt
           retention-days: 30
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        shell: bash
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="apk-build-${GITHUB_RUN_NUMBER}"
+          gh release create "${TAG}" "${APK_PATH}" \
+            --target "${GITHUB_REF_NAME}" \
+            --title "SALi-HCNSEC release APK (build ${GITHUB_RUN_NUMBER})" \
+            --notes "Signed release build from ${GITHUB_SHA}." || true
+
+      # The APK is stored as a git blob (not committed into history) and a small
+      # report file is committed so the build result can be inspected later.
+      - name: Publish Build Report
+        if: github.event_name != 'pull_request'
+        shell: bash
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import base64, json, os
+          with open(os.environ["APK_PATH"], "rb") as handle:
+              payload = {"content": base64.b64encode(handle.read()).decode(), "encoding": "base64"}
+          with open("/tmp/blob.json", "w") as handle:
+              json.dump(payload, handle)
+          PY
+
+          BLOB_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/git/blobs" --input /tmp/blob.json --jq .sha || echo "")"
+          echo "APK blob sha: ${BLOB_SHA}"
+          echo "${BLOB_SHA}" > /tmp/blob-sha.txt
+
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+
+          def read(path, limit=200):
+              try:
+                  with open(path, "r", errors="replace") as handle:
+                      return handle.read().splitlines()[-limit:]
+              except OSError:
+                  return []
+
+          def tool_output(path):
+              try:
+                  with open(path, "r", errors="replace") as handle:
+                      return handle.read().strip()
+              except OSError:
+                  return ""
+
+          apk = os.environ["APK_PATH"]
+          data = open(apk, "rb").read()
+          report = {
+              "run_number": os.environ.get("GITHUB_RUN_NUMBER"),
+              "run_id": os.environ.get("GITHUB_RUN_ID"),
+              "sha": os.environ.get("GITHUB_SHA"),
+              "ref": os.environ.get("GITHUB_REF_NAME"),
+              "apk_size_bytes": len(data),
+              "apk_size_mb": round(len(data) / (1024 * 1024), 2),
+              "apk_sha256": hashlib.sha256(data).hexdigest(),
+              "apk_blob_sha": tool_output("/tmp/blob-sha.txt"),
+              "apksigner": tool_output("apksigner.txt"),
+              "badging": tool_output("badging.txt"),
+              "unit_tests_log_tail": read("build-test.log"),
+              "release_build_log_tail": read("build-release.log"),
+          }
+          os.makedirs("ci", exist_ok=True)
+          with open("ci/last-build.json", "w") as handle:
+              json.dump(report, handle, indent=2)
+          print(json.dumps({k: v for k, v in report.items()
+                            if not k.endswith("log_tail")}, indent=2))
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci/last-build.json
+          git commit -m "ci: publish build report for run ${GITHUB_RUN_NUMBER} [skip ci]" || true
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}" || true

@@ -9,6 +9,14 @@ class ApiKeyRepository(context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val keystoreManager = KeystoreManager(context)
 
+    /**
+     * Decryption goes through the hardware backed AndroidKeyStore, which is slow
+     * enough to be visible when it happens on every outgoing request. The key is
+     * resolved once and kept for the lifetime of the process.
+     */
+    @Volatile
+    private var cachedApiKey: String? = null
+
     companion object {
         private const val PREFS_NAME = "sali_hcnsec_sec_store"
         private const val KEY_CIPHERTEXT = "enc_api_key"
@@ -24,6 +32,7 @@ class ApiKeyRepository(context: Context) {
     fun saveApiKey(apiKey: String) {
         val trimmed = apiKey.trim()
         if (trimmed.isEmpty()) return
+        cachedApiKey = null
         try {
             val (ciphertext, iv) = keystoreManager.encrypt(trimmed)
             prefs.edit()
@@ -45,18 +54,25 @@ class ApiKeyRepository(context: Context) {
      * Retrieves the decrypted HCNSEC API key.
      */
     fun getApiKey(): String? {
+        cachedApiKey?.let { return it }
+
         val ciphertext = prefs.getString(KEY_CIPHERTEXT, null) ?: return null
         val iv = prefs.getString(KEY_IV, null) ?: ""
 
-        if (ciphertext.startsWith("PLAIN:")) {
-            return ciphertext.removePrefix("PLAIN:")
+        val resolved = if (ciphertext.startsWith("PLAIN:")) {
+            ciphertext.removePrefix("PLAIN:")
+        } else {
+            try {
+                keystoreManager.decrypt(ciphertext, iv)
+            } catch (e: Exception) {
+                null
+            }
         }
 
-        return try {
-            keystoreManager.decrypt(ciphertext, iv)
-        } catch (e: Exception) {
-            null
+        if (resolved != null) {
+            cachedApiKey = resolved
         }
+        return resolved
     }
 
     fun hasApiKey(): Boolean {
@@ -64,6 +80,7 @@ class ApiKeyRepository(context: Context) {
     }
 
     fun clearApiKey() {
+        cachedApiKey = null
         prefs.edit()
             .remove(KEY_CIPHERTEXT)
             .remove(KEY_IV)

@@ -24,6 +24,14 @@ object CodeSyntaxHighlighter {
         "impl", "match", "mut", "pub", "self", "select", "where", "insert", "update", "delete"
     )
 
+    private val HASH_COMMENT_LANGUAGES = setOf("python", "py", "bash", "sh", "yaml", "yml")
+
+    /**
+     * Compiled once. It used to be constructed per word inside the highlight loop,
+     * which made rendering a large code block quadratic in the number of words.
+     */
+    private val CLASS_NAME_PATTERN = Regex("^[A-Z][a-zA-Z0-9]*$")
+
     private val TYPES = setOf(
         "String", "Int", "Boolean", "Double", "Float", "Long", "List", "Map", "Set",
         "Unit", "Any", "Array", "Flow", "StateFlow", "SharedFlow", "CoroutineScope",
@@ -35,12 +43,11 @@ object CodeSyntaxHighlighter {
             val lines = code.lines()
             for ((lineIndex, line) in lines.withIndex()) {
                 var cursor = 0
-                val trimmed = line.trimStart()
 
                 // Check for single-line comments
                 val commentIndex = when {
                     "//" in line -> line.indexOf("//")
-                    "#" in line && (language in listOf("python", "py", "bash", "sh", "yaml", "yml")) -> line.indexOf("#")
+                    "#" in line && HASH_COMMENT_LANGUAGES.contains(language) -> line.indexOf("#")
                     else -> -1
                 }
 
@@ -82,7 +89,7 @@ object CodeSyntaxHighlighter {
                                 append(word)
                                 pop()
                             }
-                            word.matches(Regex("^[A-Z][a-zA-Z0-9]*$")) -> {
+                            CLASS_NAME_PATTERN.matches(word) -> {
                                 pushStyle(SpanStyle(color = Color(0xFF50FA7B))) // Green class/entity
                                 append(word)
                                 pop()

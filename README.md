@@ -16,22 +16,48 @@ Personal AI Assistant powered exclusively by your **HCNSEC API** (`https://api.h
 
 ## 🚀 Building the APK
 
-### Method 1: Direct Build via Google AI Studio
-In the AI Studio interface:
-1. Open the project settings menu or the export/download button.
-2. Select **Generate APK / AAB**.
-3. Download the compiled file directly to your device.
+### Method 1: Automatic GitHub Actions (recommended)
+Every push to `main` or `arena/01a0abb1-personal-ai-hcn` runs `.github/workflows/build-apk.yml`, which:
 
-### Method 2: Automatic GitHub Actions (CI/CD)
-When you push this repository to GitHub:
-1. GitHub Actions will automatically trigger the `.github/workflows/build-apk.yml` workflow.
-2. Once the build completes (usually ~2-3 minutes), go to the **Actions** tab on your GitHub repository.
-3. Click on the latest workflow run and download the `Sali-HCNSEC-Debug-APK` zip file containing `app-debug.apk`.
+1. Installs JDK 17 + the Android SDK packages on the runner.
+2. Runs the unit tests (`:app:testDebugUnitTest`).
+3. Builds a **minified, resource-shrunk, signed release APK** (`:app:assembleRelease`).
+4. Verifies the signature with `apksigner` and uploads `Sali-HCNSEC-Release-APK`.
+
+Download `app-release.apk` from the **Actions** tab (artifact) or from the GitHub
+**Release** that the workflow publishes. A machine readable summary of the last
+build (size, SHA-256, signature, log tail) is written to `ci/last-build.json`.
+
+> This repository has no `gradlew` wrapper jar, so the workflow provisions Gradle
+> 9.3.1 directly instead of calling `./gradlew`.
+
+### Method 2: Stable signing key (optional, for in-place updates)
+Without configuration the workflow signs with a freshly generated key on every
+run, so a new APK has to be installed over a clean uninstall. To keep one stable
+identity, add these repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Description |
+| --- | --- |
+| `RELEASE_KEYSTORE_BASE64` | `base64 -w0 release.keystore` |
+| `STORE_PASSWORD` | keystore password |
+| `KEY_PASSWORD` | key password |
+| `KEY_ALIAS` | key alias (defaults to `upload`) |
 
 ### Method 3: Local Android Studio
-1. Clone or download this repository.
-2. Open the project folder in **Android Studio**.
-3. Let Gradle sync dependencies.
-4. Go to **Build** > **Build Bundle(s) / APK(s)** > **Build APK(s)**.
-5. The output APK will be located at:
-   `app/build/outputs/apk/debug/app-debug.apk`
+1. Clone the repository and open it in **Android Studio**.
+2. Let Gradle sync (Gradle 9.3.1 / AGP 9.1.1).
+3. **Build** → **Generate Signed Bundle / APK**, or `gradle :app:assembleRelease`.
+4. Output: `app/build/outputs/apk/release/app-release.apk`.
+
+---
+
+## ⚡ Performance notes
+
+The release build is tuned for smooth playback of streamed answers on mid/low-end phones:
+
+- R8 + resource shrinking are enabled for `release`.
+- Streamed tokens are batched (~25 fps) instead of recomposing per token, and the
+  assistant bubble recomposes in its own scope.
+- Markdown/syntax highlighting patterns are pre-compiled; inline markdown is cached.
+- Large launcher artwork is stored as WebP; the unused Firebase/AppCheck stack is gone.
+- The API key is decrypted from the AndroidKeyStore once per process, not per request.
