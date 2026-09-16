@@ -61,3 +61,5 @@ The release build is tuned for smooth playback of streamed answers on mid/low-en
 - Markdown/syntax highlighting patterns are pre-compiled; inline markdown is cached.
 - Large launcher artwork is stored as WebP; the unused Firebase/AppCheck stack is gone.
 - The API key is decrypted from the AndroidKeyStore once per process, not per request.
+
+# Build outputs are published as a GitHub Release asset plus a git blob.
