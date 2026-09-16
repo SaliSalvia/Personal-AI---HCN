@@ -112,9 +112,11 @@ the pull request.
 4. one rate-limit assertion compared a relative `x-ratelimit-reset-requests` duration against an
    absolute instant instead of the recorded observation time.
 
-Two initial CI failures were also self-inflicted workflow defects found and fixed before any code
-signal was available: `setup-gradle` was asked to restore a cache it could not, and an inserted step
-briefly absorbed the artifact-upload step's keys (which made the workflow file invalid).
+Workflow defects were found and fixed along the way — all self-inflicted, none affecting app code:
+`setup-gradle` was asked to restore a cache it could not; an inserted step briefly absorbed the
+artifact-upload step's keys, which made the workflow file invalid; and the CI summary step tripped
+over GitHub's `bash -eo pipefail` default, where `grep … | wc -l` exits non-zero on a *passing* test
+run that simply has no `<failure` elements to match.
 
 **Not executed in the authoring environment:** this sandbox has no JDK, no Android SDK and no
 Gradle, and network egress is limited to GitHub — Maven Central, `dl.google.com` and

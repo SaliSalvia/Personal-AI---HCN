@@ -85,15 +85,21 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           JOB_STATUS: ${{ job.status }}
         run: |
+          # This shell runs with `-eo pipefail`; a helper keeps "no matches" (grep exit 1) from
+          # aborting a summary of a *passing* test run.
           set -u
+          trap 'echo "::error::CI summary aborted at line $LINENO (exit $?)"' ERR
           PR=$(gh pr list --head "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" --state open --json number --jq '.[0].number' || true)
           results=app/build/test-results/testDebugUnitTest
           total=0; failures=0; errors=0; skipped=0
+          count_matches() {
+            { grep -ah -o "$1" "$results"/*.xml 2>/dev/null || true; } | awk 'END { print NR }'
+          }
           if compgen -G "$results/*.xml" > /dev/null; then
-            total=$(grep -ah -o '<testcase ' "$results"/*.xml | wc -l | tr -d ' ')
-            failures=$(grep -ah -o '<failure' "$results"/*.xml | wc -l | tr -d ' ')
-            errors=$(grep -ah -o '<error' "$results"/*.xml | wc -l | tr -d ' ')
-            skipped=$(grep -ah -o '<skipped' "$results"/*.xml | wc -l | tr -d ' ')
+            total=$(count_matches '<testcase ')
+            failures=$(count_matches '<failure')
+            errors=$(count_matches '<error')
+            skipped=$(count_matches '<skipped')
           fi
           {
             echo "### CI summary"
