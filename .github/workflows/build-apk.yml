@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -119,17 +120,29 @@ jobs:
           } > summary.md
           # Never publish credential-shaped strings, even from a failing assertion message.
           sed -i -E 's/sk-[A-Za-z0-9_-]{8,}/<redacted>/g; s/[A-Za-z0-9_-]{40,}/<redacted>/g' summary.md
-          if [ -n "$PR" ]; then
-            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("### CI summary")) | .id' 2>/dev/null | tail -1 || true)
-            if [ -n "$CID" ]; then
-              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@summary.md > /dev/null && echo "updated CI summary comment $CID"
+          publish() {
+            local out
+            if out=$(gh pr comment "$PR" --body-file summary.md 2>&1); then
+              echo "posted CI summary to PR #$PR"
+            elif out=$(gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$CID" -F body=@summary.md 2>&1); then
+              echo "updated CI summary comment $CID"
             else
-              gh pr comment "$PR" --body-file summary.md > /dev/null && echo "posted CI summary to PR #$PR"
+              # Diagnostics must stay readable: job logs are not always reachable.
+              echo "::error::could not publish the CI summary: $(printf '%s' "$out" | head -3 | tr '\n' ' ')"
+              printf '%s\n' "$(cat summary.md)"
             fi
+          }
+
+          CID=""
+          if [ -n "$PR" ]; then
+            CID=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[] | select(.body | contains("### CI summary")) | .id' 2>/dev/null | tail -1)
+            CID=${CID:-}
+            publish
           else
             echo "no open PR for this branch"
             cat summary.md
           fi
+          exit 0
 
       - name: Upload test reports
         if: always()
