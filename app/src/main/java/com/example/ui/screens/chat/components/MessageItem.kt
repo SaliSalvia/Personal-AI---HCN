@@ -96,6 +96,9 @@ fun MessageItem(
     val context = LocalContext.current
     var isCopied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val timeLabel = remember(message.timestamp) {
+        SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.timestamp))
+    }
 
     // Determine thinking state (like Claude: auto-expanded while thinking, collapsible once done)
     val isCurrentlyThinking = message.isStreaming && message.content.isBlank() && !message.reasoningContent.isNullOrBlank()
@@ -207,7 +210,7 @@ fun MessageItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(message.timestamp)),
+                text = timeLabel,
                 color = TextSecondary,
                 fontSize = 10.sp
             )
@@ -257,20 +260,7 @@ private fun ClaudeStyleThinkingBlock(
     val scope = rememberCoroutineScope()
     var isThoughtCopied by remember { mutableStateOf(false) }
 
-    val infiniteTransition = rememberInfiniteTransition(label = "thinking_pulse")
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.5f,
-        targetValue = 1.0f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulse_alpha"
-    )
-
-    val wordCount = remember(reasoningText) {
-        reasoningText.trim().split("\\s+".toRegex()).count { it.isNotEmpty() }
-    }
+    val wordCount = remember(reasoningText) { countWords(reasoningText) }
 
     val blockShape = RoundedCornerShape(14.dp)
     Surface(
@@ -442,6 +432,25 @@ private fun ClaudeStyleThinkingBlock(
             }
         }
     }
+}
+
+/**
+ * Counts whitespace separated words without allocating a list of tokens.
+ * The previous `split(regex).count {}` re-tokenised the entire reasoning chain on
+ * every streamed update, which is quadratic over a long thought process.
+ */
+private fun countWords(text: String): Int {
+    var count = 0
+    var insideWord = false
+    for (ch in text) {
+        if (ch.isWhitespace()) {
+            insideWord = false
+        } else if (!insideWord) {
+            insideWord = true
+            count++
+        }
+    }
+    return count
 }
 
 /**

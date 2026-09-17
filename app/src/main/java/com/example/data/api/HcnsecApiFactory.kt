@@ -2,7 +2,7 @@ package com.example.data.api
 
 import com.example.data.security.ApiKeyRepository
 import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.example.BuildConfig
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
@@ -114,17 +114,24 @@ object HcnsecApiFactory {
      * Builds configured OkHttpClient with timeouts, security interceptor, and retry mechanisms.
      */
     fun createOkHttpClient(apiKeyRepository: ApiKeyRepository): OkHttpClient {
-        val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
-        }
-
         return OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(120, TimeUnit.SECONDS)
             .writeTimeout(60, TimeUnit.SECONDS)
             .addInterceptor(createAuthInterceptor(apiKeyRepository))
             .addInterceptor(createRetryAndHttpStatusInterceptor(maxRetries = 3))
-            .addInterceptor(loggingInterceptor)
+            .apply {
+                // Logging is debug only: writing every request to logcat on a release
+                // build costs frames and would expose request metadata.
+                if (BuildConfig.DEBUG) {
+                    addInterceptor(
+                        HttpLoggingInterceptor().apply {
+                            level = HttpLoggingInterceptor.Level.BASIC
+                            redactHeader("Authorization")
+                        }
+                    )
+                }
+            }
             .retryOnConnectionFailure(true)
             .build()
     }
@@ -133,9 +140,7 @@ object HcnsecApiFactory {
      * Creates and initializes the Retrofit HCNSEC service instance.
      */
     fun createService(apiKeyRepository: ApiKeyRepository): HcnsecApiService {
-        val moshi = Moshi.Builder()
-            .addLast(KotlinJsonAdapterFactory())
-            .build()
+        val moshi = Moshi.Builder().build()
 
         val client = createOkHttpClient(apiKeyRepository)
 

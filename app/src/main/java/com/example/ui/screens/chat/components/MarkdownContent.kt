@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -36,6 +37,15 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+
+/**
+ * Inline markdown -> AnnotatedString conversion is pure but not free. Caching it
+ * per source string keeps a recomposition (e.g. while tokens are streaming in)
+ * from re-scanning every paragraph, list item and quote of the whole message.
+ */
+@Composable
+private fun rememberInline(text: String): AnnotatedString =
+    remember(text) { MarkdownRenderer.renderInline(text) }
 
 @Composable
 fun MarkdownContent(
@@ -100,7 +110,7 @@ fun MarkdownContent(
                                         .background(IceCyan)
                                 )
                                 Text(
-                                    text = MarkdownRenderer.renderInline(itemText),
+                                    text = rememberInline(itemText),
                                     color = TextPrimary,
                                     fontSize = 14.sp,
                                     lineHeight = 21.sp,
@@ -132,7 +142,7 @@ fun MarkdownContent(
                                         .padding(top = 1.dp)
                                 )
                                 Text(
-                                    text = MarkdownRenderer.renderInline(itemText),
+                                    text = rememberInline(itemText),
                                     color = TextPrimary,
                                     fontSize = 14.sp,
                                     lineHeight = 21.sp,
@@ -162,7 +172,7 @@ fun MarkdownContent(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = MarkdownRenderer.renderInline(block.text),
+                            text = rememberInline(block.text),
                             color = Color(0xFFCBD5E1),
                             fontSize = 13.sp,
                             fontStyle = FontStyle.Italic,
@@ -184,7 +194,7 @@ fun MarkdownContent(
 
                 is MarkdownBlock.Paragraph -> {
                     Text(
-                        text = MarkdownRenderer.renderInline(block.text),
+                        text = rememberInline(block.text),
                         color = TextPrimary,
                         fontSize = 14.sp,
                         lineHeight = 21.sp,

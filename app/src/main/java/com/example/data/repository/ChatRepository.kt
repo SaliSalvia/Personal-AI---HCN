@@ -17,6 +17,8 @@ import com.example.domain.router.AutoModelRouter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -111,12 +113,16 @@ class ChatRepository(
         availableModels: List<AiModel>,
         attachments: List<AttachmentItem> = emptyList(),
         workspaceId: String? = null,
+        regenerate: Boolean = false,
         onChunkReceived: (String, String?) -> Unit, // contentChunk, reasoningChunk
         onError: (String) -> Unit,
         onCompleted: (String) -> Unit
     ) = withContext(Dispatchers.IO) {
         if (userPrompt.isBlank() && attachments.isEmpty()) return@withContext
 
+        // Keep a handle on the caller's job so stopGeneration() can really cancel
+        // the running stream (it was never assigned before, so Stop did nothing).
+        activeGenerationJob = currentCoroutineContext()[Job]
         _isGenerating.value = true
         val steps = mutableListOf<TraceStep>()
 
@@ -124,16 +130,25 @@ class ChatRepository(
         steps.add(TraceStep("step_understand", "Understand user request", "Analyzing prompt and intent", TraceStepStatus.RUNNING))
         _currentTrace.value = steps.toList()
 
-        // Persist User Message
+        // Persist User Message (skipped when regenerating an existing answer)
         val userMsgId = UUID.randomUUID().toString()
-        val userEntity = MessageEntity(
-            id = userMsgId,
-            conversationId = conversationId,
-            role = "user",
-            content = userPrompt,
-            timestamp = System.currentTimeMillis()
-        )
-        messageDao.insert(userEntity)
+        if (regenerate) {
+            // Replace the previous assistant answer instead of duplicating the
+            // user's prompt in the transcript.
+            messageDao.getMessagesSnapshot(conversationId)
+                .lastOrNull { it.role == "assistant" }
+                ?.let { messageDao.deleteById(it.id) }
+        } else {
+            messageDao.insert(
+                MessageEntity(
+                    id = userMsgId,
+                    conversationId = conversationId,
+                    role = "user",
+                    content = userPrompt,
+                    timestamp = System.currentTimeMillis()
+                )
+            )
+        }
 
         // Step 1 completed
         updateTraceStep(steps, "step_understand", TraceStepStatus.COMPLETED)
@@ -203,8 +218,14 @@ class ChatRepository(
             )
         )
 
+        val contextTargetId = if (regenerate) {
+            history.lastOrNull { it.role == "user" }?.id
+        } else {
+            userMsgId
+        }
+
         for (msg in history) {
-            if (msg.id == userMsgId && additionalContext.isNotEmpty()) {
+            if (msg.id == contextTargetId && additionalContext.isNotEmpty()) {
                 apiMessages.add(ChatMessageDto(role = msg.role, content = msg.content + additionalContext.toString()))
             } else {
                 apiMessages.add(ChatMessageDto(role = msg.role, content = msg.content))
@@ -212,27 +233,40 @@ class ChatRepository(
         }
 
         val assistantMsgId = UUID.randomUUID().toString()
-        var fullAssistantContent = ""
-        var fullReasoningContent: String? = null
+        // Accumulate into StringBuilders. Concatenating an immutable String per
+        // token copied the entire answer again on every chunk, which made long
+        // responses quadratic in both CPU and garbage.
+        val contentBuilder = StringBuilder()
+        val reasoningBuilder = StringBuilder()
+        var lastSavedContentLength = -1
+        var lastSavedReasoningLength = -1
 
         var isInsideThinkTag = false
         var lastPeriodicSaveTime = System.currentTimeMillis()
 
         suspend fun periodicAutoSave() {
             val now = System.currentTimeMillis()
-            if (now - lastPeriodicSaveTime >= 1000L && (fullAssistantContent.isNotEmpty() || !fullReasoningContent.isNullOrEmpty())) {
-                lastPeriodicSaveTime = now
-                messageDao.insert(
-                    MessageEntity(
-                        id = assistantMsgId,
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = fullAssistantContent,
-                        reasoningContent = fullReasoningContent,
-                        timestamp = now
-                    )
-                )
+            if (now - lastPeriodicSaveTime < 1000L) return
+            if (contentBuilder.isEmpty() && reasoningBuilder.isEmpty()) return
+            // Nothing new since the previous snapshot -> skip the database write.
+            if (contentBuilder.length == lastSavedContentLength &&
+                reasoningBuilder.length == lastSavedReasoningLength
+            ) {
+                return
             }
+            lastPeriodicSaveTime = now
+            lastSavedContentLength = contentBuilder.length
+            lastSavedReasoningLength = reasoningBuilder.length
+            messageDao.insert(
+                MessageEntity(
+                    id = assistantMsgId,
+                    conversationId = conversationId,
+                    role = "assistant",
+                    content = contentBuilder.toString(),
+                    reasoningContent = reasoningBuilder.toString().ifEmpty { null },
+                    timestamp = now
+                )
+            )
         }
 
         try {
@@ -247,7 +281,7 @@ class ChatRepository(
                             val thinkIndex = text.indexOf("<think>")
                             val beforeThink = text.substring(0, thinkIndex)
                             if (beforeThink.isNotEmpty()) {
-                                fullAssistantContent += beforeThink
+                                contentBuilder.append(beforeThink)
                                 onChunkReceived(beforeThink, null)
                             }
                             isInsideThinkTag = true
@@ -261,33 +295,36 @@ class ChatRepository(
                                 val thinkPart = text.substring(0, closeIndex)
                                 val afterThink = text.substring(closeIndex + 8)
                                 if (thinkPart.isNotEmpty()) {
-                                    fullReasoningContent = (fullReasoningContent ?: "") + thinkPart
+                                    reasoningBuilder.append(thinkPart)
                                     onChunkReceived("", thinkPart)
                                 }
                                 isInsideThinkTag = false
                                 updateTraceStep(steps, "step_stream", TraceStepStatus.RUNNING, "Formulating final response...")
                                 if (afterThink.isNotEmpty()) {
-                                    fullAssistantContent += afterThink
+                                    contentBuilder.append(afterThink)
                                     onChunkReceived(afterThink, null)
                                 }
                             } else {
                                 if (text.isNotEmpty()) {
-                                    fullReasoningContent = (fullReasoningContent ?: "") + text
+                                    reasoningBuilder.append(text)
                                     onChunkReceived("", text)
                                 }
                             }
                         } else {
-                            if (fullReasoningContent != null && fullAssistantContent.isEmpty()) {
+                            if (reasoningBuilder.isNotEmpty() && contentBuilder.isEmpty()) {
                                 updateTraceStep(steps, "step_stream", TraceStepStatus.RUNNING, "Streaming formatted answer...")
                             }
-                            fullAssistantContent += text
+                            contentBuilder.append(text)
                             onChunkReceived(text, null)
                         }
                         periodicAutoSave()
                     }
                     is StreamEvent.Reasoning -> {
+                        // updateTraceStep() is a no-op while status and detail are
+                        // unchanged, so this no longer republishes the whole trace
+                        // (and recomposes the screen) on every reasoning token.
                         updateTraceStep(steps, "step_stream", TraceStepStatus.RUNNING, "Deep reasoning & analysis (DeepSeek-R1)...")
-                        fullReasoningContent = (fullReasoningContent ?: "") + event.reasoningText
+                        reasoningBuilder.append(event.reasoningText)
                         onChunkReceived("", event.reasoningText)
                         periodicAutoSave()
                     }
@@ -301,8 +338,11 @@ class ChatRepository(
                 }
             }
 
+            val fullAssistantContent = contentBuilder.toString()
+            val fullReasoningContent = reasoningBuilder.toString().ifEmpty { null }
+
             // Save assistant message to Room
-            if (fullAssistantContent.isNotEmpty() || !fullReasoningContent.isNullOrEmpty()) {
+            if (fullAssistantContent.isNotEmpty() || fullReasoningContent != null) {
                 val assistantEntity = MessageEntity(
                     id = assistantMsgId,
                     conversationId = conversationId,
@@ -314,7 +354,7 @@ class ChatRepository(
                 messageDao.insert(assistantEntity)
 
                 // Auto rename conversation if it's new
-                if (history.size <= 2) {
+                if (history.size <= 2 && !regenerate) {
                     val autoTitle = userPrompt.take(30).trim()
                     if (autoTitle.isNotEmpty()) {
                         conversationDao.rename(conversationId, autoTitle)
@@ -325,17 +365,22 @@ class ChatRepository(
             onCompleted(fullAssistantContent)
         } catch (e: CancellationException) {
             updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, "Generation stopped by user")
-            if (fullAssistantContent.isNotEmpty()) {
-                messageDao.insert(
-                    MessageEntity(
-                        id = assistantMsgId,
-                        conversationId = conversationId,
-                        role = "assistant",
-                        content = fullAssistantContent + "\n\n*(Generation stopped)*",
-                        reasoningContent = fullReasoningContent,
-                        timestamp = System.currentTimeMillis()
+            if (contentBuilder.isNotEmpty()) {
+                // This coroutine is already cancelled, so a plain suspend call would
+                // throw before touching the database and the partial answer would be
+                // lost. NonCancellable lets the final snapshot land in Room.
+                withContext(NonCancellable) {
+                    messageDao.insert(
+                        MessageEntity(
+                            id = assistantMsgId,
+                            conversationId = conversationId,
+                            role = "assistant",
+                            content = contentBuilder.toString() + "\n\n*(Generation stopped)*",
+                            reasoningContent = reasoningBuilder.toString().ifEmpty { null },
+                            timestamp = System.currentTimeMillis()
+                        )
                     )
-                )
+                }
             }
             throw e
         } catch (e: Exception) {
@@ -343,6 +388,7 @@ class ChatRepository(
             onError(e.localizedMessage ?: "Unexpected error")
         } finally {
             _isGenerating.value = false
+            activeGenerationJob = null
         }
     }
 
@@ -353,14 +399,17 @@ class ChatRepository(
         detail: String? = null
     ) {
         val index = steps.indexOfFirst { it.id == stepId }
-        if (index != -1) {
-            val current = steps[index]
-            steps[index] = current.copy(
-                status = status,
-                detail = detail ?: current.detail
-            )
-            _currentTrace.value = steps.toList()
-        }
+        if (index == -1) return
+        val current = steps[index]
+        val next = current.copy(
+            status = status,
+            detail = detail ?: current.detail
+        )
+        // Identical update -> do not allocate a new list and do not emit, otherwise
+        // every streamed token would push a fresh trace snapshot to the UI.
+        if (next == current) return
+        steps[index] = next
+        _currentTrace.value = steps.toList()
     }
 
     fun stopGeneration() {
