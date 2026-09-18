@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import java.io.InputStream
+import java.io.File
 
 class WorkspaceRepository(
     private val workspaceDao: WorkspaceDao,
@@ -54,5 +55,10 @@ class WorkspaceRepository(
     suspend fun deleteWorkspace(workspaceId: String) = withContext(Dispatchers.IO) {
         zipWorkspaceManager.deleteWorkspace(workspaceId)
         workspaceDao.deleteById(workspaceId)
+    }
+
+    /** Creates a single archive containing the selected project versions. */
+    suspend fun exportWorkspaces(workspaceIds: List<String>, archiveName: String): File = withContext(Dispatchers.IO) {
+        zipWorkspaceManager.exportWorkspaces(workspaceIds, archiveName)
     }
 }

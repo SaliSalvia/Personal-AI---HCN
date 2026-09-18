@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Psychology
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Visibility
@@ -39,6 +40,7 @@ import androidx.compose.material3.SheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,6 +50,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -72,6 +76,9 @@ fun ModelSelectorSheet(
     onAddCustomModel: (String) -> Unit,
     onDeleteCustomModel: (String) -> Unit,
     onToggleFavorite: (AiModel) -> Unit,
+    isRefreshing: Boolean,
+    refreshError: String?,
+    onRefreshModels: () -> Unit,
     onDismiss: () -> Unit
 ) {
     var customModelInput by remember { mutableStateOf("") }
@@ -84,14 +91,15 @@ fun ModelSelectorSheet(
         scrimColor = Color.Black.copy(alpha = 0.6f),
         shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 8.dp)
-                .testTag("model_selector_sheet")
-        ) {
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .testTag("model_selector_sheet")
+            ) {
             Text(
-                text = "Select HCNSEC Model",
+                text = "مدل HCNSEC را انتخاب کنید",
                 color = TextPrimary,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -140,13 +148,13 @@ fun ModelSelectorSheet(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Auto Mode (Recommended)",
+                            text = "حالت ایجنت خودکار (پیشنهادی)",
                             color = TextPrimary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = "Classifies task and selects optimal available HCNSEC model",
+                            text = "درخواست را تحلیل کرده و بهترین مدل در دسترس را انتخاب می‌کند",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )
@@ -171,16 +179,39 @@ fun ModelSelectorSheet(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "Available Models",
+                    text = "مدل‌های قابل استفاده برای کلید شما",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold
                 )
 
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (isRefreshing) "در حال دریافت…" else "${availableModels.size} مدل",
+                        color = VioletLight,
+                        fontSize = 12.sp
+                    )
+                    IconButton(
+                        onClick = onRefreshModels,
+                        enabled = !isRefreshing,
+                        modifier = Modifier.size(32.dp).testTag("refresh_hcnsec_models")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh models from HCNSEC",
+                            tint = VioletLight,
+                            modifier = Modifier.size(17.dp)
+                        )
+                    }
+                }
+            }
+
+            if (refreshError != null) {
                 Text(
-                    text = "${availableModels.size} models",
-                    color = VioletLight,
-                    fontSize = 12.sp
+                    text = "خطا در دریافت مدل‌ها: $refreshError",
+                    color = Color(0xFFFCA5A5),
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
 
@@ -272,7 +303,8 @@ fun ModelSelectorSheet(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(24.dp))
+            }
         }
     }
 }
