@@ -41,6 +41,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -218,7 +220,7 @@ fun ChatInputBar(
             ) {
                 if (inputText.isEmpty()) {
                     Text(
-                        text = "Message SALi-HCNSEC...",
+                        text = "پیام برای Salar Salvia…",
                         color = Color(0xFF70809C),
                         fontSize = 14.sp
                     )
@@ -229,7 +231,9 @@ fun ChatInputBar(
                     textStyle = TextStyle(
                         color = TextPrimary,
                         fontSize = 14.sp,
-                        lineHeight = 20.sp
+                        lineHeight = 20.sp,
+                        textAlign = TextAlign.Start,
+                        textDirection = TextDirection.ContentOrRtl
                     ),
                     cursorBrush = SolidColor(IceCyan),
                     modifier = Modifier

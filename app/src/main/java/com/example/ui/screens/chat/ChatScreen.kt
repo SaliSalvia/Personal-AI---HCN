@@ -112,6 +112,8 @@ fun ChatScreen(
     val isGenerating by viewModel.isGenerating.collectAsState()
     val selectedModelId by viewModel.selectedModelId.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
+    val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
+    val modelRefreshError by viewModel.modelRefreshError.collectAsState()
     val attachments by viewModel.attachments.collectAsState()
     val currentTrace by viewModel.currentTrace.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
@@ -204,6 +206,12 @@ fun ChatScreen(
                                 color = TextPrimary,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.SemiBold,
+                                maxLines = 1
+                            )
+                            Text(
+                                text = "Salar Salvia • AI workspace",
+                                color = IceCyanLight.copy(alpha = 0.72f),
+                                fontSize = 10.sp,
                                 maxLines = 1
                             )
                             if (activeWorkspace != null) {
@@ -426,6 +434,9 @@ fun ChatScreen(
             onAddCustomModel = { modelId -> viewModel.addCustomModel(modelId) },
             onDeleteCustomModel = { modelId -> viewModel.deleteCustomModel(modelId) },
             onToggleFavorite = { model -> viewModel.toggleFavoriteModel(model) },
+            isRefreshing = isRefreshingModels,
+            refreshError = modelRefreshError,
+            onRefreshModels = viewModel::refreshAvailableModels,
             onDismiss = { showModelSheet = false }
         )
     }

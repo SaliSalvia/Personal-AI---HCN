@@ -84,6 +84,10 @@ class ChatViewModel(
         modelRepository.allModels
             .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
+    /** Live status for the official HCNSEC model catalogue refresh. */
+    val isRefreshingModels = modelRepository.isLoading
+    val modelRefreshError = modelRepository.errorMessage
+
     private var messagesObservationJob: Job? = null
     private var draftSaveJob: Job? = null
 
@@ -240,6 +244,13 @@ class ChatViewModel(
     fun selectModel(modelId: String) {
         _selectedModelId.value = modelId
         apiKeyRepository.setDefaultModel(modelId)
+    }
+
+    /** Fetches the models available to the currently configured HCNSEC key. */
+    fun refreshAvailableModels() {
+        viewModelScope.launch {
+            modelRepository.refreshModels()
+        }
     }
 
     fun addCustomModel(modelId: String) {

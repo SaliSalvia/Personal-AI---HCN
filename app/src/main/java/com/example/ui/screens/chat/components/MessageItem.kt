@@ -61,6 +61,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
@@ -192,7 +194,9 @@ fun MessageItem(
                             text = message.content,
                             color = TextPrimary,
                             fontSize = 14.sp,
-                            lineHeight = 20.sp
+                            lineHeight = 20.sp,
+                            textAlign = TextAlign.Start,
+                            textDirection = TextDirection.ContentOrRtl
                         )
                     } else {
                         if (message.content.isNotBlank()) {
