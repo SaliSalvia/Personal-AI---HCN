@@ -11,6 +11,7 @@ import java.io.InputStream
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 class ZipWorkspaceManager(private val context: Context) {
 
@@ -336,5 +337,25 @@ class ZipWorkspaceManager(private val context: Context) {
         if (dir.exists()) {
             dir.deleteRecursively()
         }
+    }
+
+    /** Exports one or more imported workspaces to a shareable ZIP in cache storage. */
+    fun exportWorkspaces(workspaceIds: List<String>, archiveName: String): File {
+        require(workspaceIds.isNotEmpty()) { "Select at least one workspace" }
+        val output = File(context.cacheDir, "${archiveName.ifBlank { "Salar-Salvia-golden" }}.zip")
+        ZipOutputStream(output.outputStream().buffered()).use { zip ->
+            workspaceIds.distinct().forEach { id ->
+                val root = File(workspacesDir, id)
+                require(root.exists()) { "Workspace is no longer available" }
+                root.walkTopDown().filter { it.isFile }.forEach { file ->
+                    val relative = file.relativeTo(root).invariantSeparatorsPath
+                    val entry = "$id/$relative"
+                    zip.putNextEntry(ZipEntry(entry))
+                    file.inputStream().buffered().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+        }
+        return output
     }
 }

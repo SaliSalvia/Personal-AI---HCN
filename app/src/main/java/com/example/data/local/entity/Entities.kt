@@ -59,3 +59,17 @@ data class CustomModelEntity(
     val isFavorite: Boolean = false,
     val createdAt: Long = System.currentTimeMillis()
 )
+
+/** Metadata for an imported source. Content lives in app-private storage, not in Room. */
+@Entity(tableName = "source_documents", indices = [Index(value = ["createdAt"])])
+data class SourceDocumentEntity(
+    @PrimaryKey val id: String,
+    val displayName: String,
+    val mimeType: String,
+    val kind: String,
+    val localPath: String,
+    val extractedTextPath: String? = null,
+    val workspaceId: String? = null,
+    val sizeBytes: Long = 0L,
+    val createdAt: Long = System.currentTimeMillis()
+)

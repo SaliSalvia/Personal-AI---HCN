@@ -12,7 +12,9 @@ pluginManagement {
   }
 }
 
-plugins { id("org.gradle.toolchains.foojay-resolver-convention") version "1.0.0" }
+// CI explicitly provisions JDK 21 and this project has no Java toolchain block.
+// Avoiding the optional Foojay settings plugin keeps configuration independent of
+// Gradle Plugin Portal availability, so the APK workflow can reach compilation.
 
 dependencyResolutionManagement {
   repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)

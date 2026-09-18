@@ -83,6 +83,7 @@ fun AppNavGraph(
                     chatRepository = appContainer.chatRepository,
                     modelRepository = appContainer.modelRepository,
                     workspaceRepository = appContainer.workspaceRepository,
+                    sourceDocumentRepository = appContainer.sourceDocumentRepository,
                     apiKeyRepository = appContainer.apiKeyRepository
                 )
             )

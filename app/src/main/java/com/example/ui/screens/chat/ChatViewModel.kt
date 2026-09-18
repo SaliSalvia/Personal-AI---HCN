@@ -10,6 +10,7 @@ import com.example.data.local.entity.WorkspaceEntity
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.ModelRepository
 import com.example.data.repository.WorkspaceRepository
+import com.example.data.repository.SourceDocumentRepository
 import com.example.data.security.ApiKeyRepository
 import com.example.domain.model.AiModel
 import com.example.domain.model.AttachmentItem
@@ -34,6 +35,7 @@ class ChatViewModel(
     private val chatRepository: ChatRepository,
     private val modelRepository: ModelRepository,
     private val workspaceRepository: WorkspaceRepository,
+    private val sourceDocumentRepository: SourceDocumentRepository,
     private val apiKeyRepository: ApiKeyRepository
 ) : ViewModel() {
 
@@ -327,6 +329,25 @@ class ChatViewModel(
                                 _errorMessage.value = "ZIP extraction failed: ${err.message}"
                             }
                         )
+                    } else if (mimeType == "application/pdf" || filename.endsWith(".pdf", ignoreCase = true)) {
+                        val result = sourceDocumentRepository.importPdf(
+                            uri = uri,
+                            displayName = filename,
+                            sizeBytes = querySize(appContext, uri) ?: 0L
+                        )
+                        result.fold(
+                            onSuccess = { source ->
+                                _attachments.value = _attachments.value + AttachmentItem(
+                                    id = source.id,
+                                    name = source.displayName,
+                                    mimeType = source.mimeType,
+                                    sizeBytes = source.sizeBytes,
+                                    extractedText = source.extractedTextPath?.let { File(it).readText(Charsets.UTF_8) },
+                                    status = AttachmentStatus.READY
+                                )
+                            },
+                            onFailure = { throw it }
+                        )
                     } else {
                         // Regular text/code/doc attachment (capped so a huge file
                         // cannot exhaust the heap of a low end device).
@@ -542,11 +563,12 @@ class ChatViewModel(
         private val chatRepository: ChatRepository,
         private val modelRepository: ModelRepository,
         private val workspaceRepository: WorkspaceRepository,
+        private val sourceDocumentRepository: SourceDocumentRepository,
         private val apiKeyRepository: ApiKeyRepository
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: Class<T>): T {
-            return ChatViewModel(chatRepository, modelRepository, workspaceRepository, apiKeyRepository) as T
+            return ChatViewModel(chatRepository, modelRepository, workspaceRepository, sourceDocumentRepository, apiKeyRepository) as T
         }
     }
 }

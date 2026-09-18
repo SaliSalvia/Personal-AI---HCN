@@ -6,6 +6,7 @@ import com.example.data.local.AppDatabase
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.ModelRepository
 import com.example.data.repository.WorkspaceRepository
+import com.example.data.repository.SourceDocumentRepository
 import com.example.data.security.ApiKeyRepository
 import com.example.data.workspace.ZipWorkspaceManager
 import com.example.domain.router.AutoModelRouter
@@ -60,5 +61,9 @@ class AppContainer(context: Context) {
             workspaceDao = database.workspaceDao(),
             zipWorkspaceManager = zipWorkspaceManager
         )
+    }
+
+    val sourceDocumentRepository by lazy {
+        SourceDocumentRepository(appContext, database.sourceDocumentDao())
     }
 }
