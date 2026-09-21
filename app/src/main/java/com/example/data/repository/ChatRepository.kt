@@ -113,6 +113,7 @@ class ChatRepository(
         availableModels: List<AiModel>,
         attachments: List<AttachmentItem> = emptyList(),
         workspaceId: String? = null,
+        workspaceIds: List<String> = emptyList(),
         regenerate: Boolean = false,
         onChunkReceived: (String, String?) -> Unit, // contentChunk, reasoningChunk
         onError: (String) -> Unit,
@@ -160,11 +161,14 @@ class ChatRepository(
         val additionalContext = StringBuilder()
 
         // Workspace intelligence context injection
-        if (workspaceId != null) {
-            val relevantChunks = zipWorkspaceManager.getRelevantWorkspaceChunks(workspaceId, userPrompt, maxTotalChunks = 4)
-            if (relevantChunks.isNotEmpty()) {
-                additionalContext.append("\n\n--- WORKSPACE CODE CONTEXT ---\n")
-                for (chunk in relevantChunks) {
+        val comparisonWorkspaceIds = (workspaceIds + workspaceId).filterNotNull().distinct()
+        if (comparisonWorkspaceIds.isNotEmpty()) {
+            additionalContext.append("\n\n--- MULTI-VERSION PROJECT CONTEXT ---\n")
+            additionalContext.append("You are comparing ${comparisonWorkspaceIds.size} imported project version(s). Treat each version as a separate candidate. Identify strengths, regressions, compatibility, security risks, and mergeable features. Do not invent files that are not present.\n")
+            comparisonWorkspaceIds.forEachIndexed { index, id ->
+                val relevantChunks = zipWorkspaceManager.getRelevantWorkspaceChunks(id, userPrompt, maxTotalChunks = 4)
+                additionalContext.append("\n### PROJECT VERSION ${index + 1} ($id)\n")
+                relevantChunks.forEach { chunk ->
                     additionalContext.append("File: ${chunk.filePath} [part ${chunk.chunkIndex}/${chunk.totalChunks}]:\n")
                     additionalContext.append("```\n${chunk.content}\n```\n\n")
                 }

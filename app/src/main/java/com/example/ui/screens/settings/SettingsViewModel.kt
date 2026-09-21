@@ -3,6 +3,7 @@ package com.example.ui.screens.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.api.AiProvider
 import com.example.data.api.HcnsecApiClient
 import com.example.data.api.UserBalanceDto
 import com.example.data.repository.ModelRepository
@@ -30,6 +31,33 @@ class SettingsViewModel(
 
     val maskedApiKey: String
         get() = apiKeyRepository.getMaskedApiKey()
+
+    private val _activeProvider = MutableStateFlow(apiKeyRepository.getActiveProvider())
+    val activeProvider = _activeProvider.asStateFlow()
+
+    fun selectProvider(provider: AiProvider) {
+        apiKeyRepository.setActiveProvider(provider)
+        _activeProvider.value = provider
+    }
+
+    fun providerKeyStatus(provider: AiProvider): String = apiKeyRepository.getMaskedProviderKey(provider)
+
+    fun saveProviderKey(provider: AiProvider, key: String, onSuccess: (AiProvider) -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch {
+            val detectedProvider = AiProvider.detectFromKey(key) ?: provider
+            apiKeyRepository.setActiveProvider(detectedProvider)
+            _activeProvider.value = detectedProvider
+            val result = apiClient.validateApiKey(key)
+            result.fold(
+                onSuccess = {
+                    apiKeyRepository.saveProviderKey(detectedProvider, key)
+                    modelRepository.refreshModels()
+                    onSuccess(detectedProvider)
+                },
+                onFailure = { onError(it.message ?: "Provider key validation failed") }
+            )
+        }
+    }
 
     private val _isAutoRouting = MutableStateFlow(apiKeyRepository.isAutoRoutingEnabled())
     val isAutoRouting = _isAutoRouting.asStateFlow()
@@ -62,6 +90,8 @@ class SettingsViewModel(
     }
 
     fun testConnection() {
+        apiKeyRepository.setActiveProvider(AiProvider.HCNSEC)
+        _activeProvider.value = AiProvider.HCNSEC
         val key = apiKeyRepository.getApiKey()
         if (key.isNullOrBlank()) {
             _testState.value = ConnectionTestState.Error("No API key stored")
@@ -83,6 +113,8 @@ class SettingsViewModel(
     }
 
     fun updateApiKey(newKey: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        apiKeyRepository.setActiveProvider(AiProvider.HCNSEC)
+        _activeProvider.value = AiProvider.HCNSEC
         viewModelScope.launch {
             val result = apiClient.validateApiKey(newKey)
             result.fold(

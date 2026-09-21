@@ -4,6 +4,9 @@ import android.content.Context
 import com.example.domain.model.FileChunk
 import com.example.domain.model.WorkspaceFileInfo
 import com.example.domain.model.WorkspaceSummary
+import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
+import com.tom_roush.pdfbox.pdmodel.PDDocument
+import com.tom_roush.pdfbox.text.PDFTextStripper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -34,7 +37,7 @@ class ZipWorkspaceManager(private val context: Context) {
         private val CODE_EXTENSIONS = setOf(
             "kt", "kts", "java", "py", "js", "ts", "jsx", "tsx", "c", "cpp", "h",
             "cs", "go", "rs", "swift", "dart", "html", "css", "xml", "json", "yaml",
-            "yml", "md", "sql", "sh", "gradle", "properties", "toml", "env"
+            "yml", "md", "sql", "sh", "gradle", "properties", "toml", "env", "docx", "pdf"
         )
     }
 
@@ -291,7 +294,7 @@ class ZipWorkspaceManager(private val context: Context) {
                 if (chunks.size >= maxTotalChunks) return@forEach
 
                 try {
-                    val content = file.readText(Charsets.UTF_8)
+                    val content = readTextLikeFile(file)
                     val relPath = file.relativeTo(workspaceRoot).path
 
                     // Score relevance
@@ -299,7 +302,8 @@ class ZipWorkspaceManager(private val context: Context) {
                         relPath.lowercase().contains(term) || content.lowercase().contains(term)
                     }
 
-                    if (matchesQuery || isKeyProjectFile(file.name)) {
+                    val isDocumentation = file.extension.lowercase() in setOf("md", "docx", "pdf")
+                    if (matchesQuery || isKeyProjectFile(file.name) || isDocumentation) {
                         val fileChunks = chunkString(content, CHUNK_SIZE_CHARS)
                         for (i in fileChunks.indices) {
                             if (chunks.size < maxTotalChunks) {
@@ -318,6 +322,34 @@ class ZipWorkspaceManager(private val context: Context) {
             }
 
         return chunks
+    }
+
+    private fun readTextLikeFile(file: File): String {
+        if (file.name.endsWith(".pdf", ignoreCase = true)) {
+            return try {
+                PDFBoxResourceLoader.init(context)
+                PDDocument.load(file).use { document -> PDFTextStripper().getText(document).take(200_000) }
+            } catch (_: Exception) {
+                "[PDF text extraction failed for ${file.name}]"
+            }
+        }
+        if (!file.name.endsWith(".docx", ignoreCase = true)) return file.readText(Charsets.UTF_8)
+        val xml = ZipInputStream(file.inputStream()).use { zip ->
+            var document: String? = null
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (entry.name == "word/document.xml") {
+                    document = zip.readBytes().toString(Charsets.UTF_8)
+                    break
+                }
+                entry = zip.nextEntry
+            }
+            document.orEmpty()
+        }
+        return xml.replace(Regex("</w:p>"), "\\n")
+            .replace(Regex("<[^>]+>"), "")
+            .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .trim()
     }
 
     private fun chunkString(text: String, chunkSize: Int): List<String> {

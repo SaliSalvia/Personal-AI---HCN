@@ -519,6 +519,13 @@ private fun EmptyChatState(
             )
 
             PromptCard(
+                title = "Compare Project Versions",
+                subtitle = "Upload multiple ZIPs and find the strongest golden merge",
+                onClick = { onSelectPrompt("Compare all uploaded project versions. Rank them by architecture, reliability, security, performance, maintainability, and completeness. Identify compatible features and give me a file-level golden merge plan with tests and migration risks.") },
+                accentColor = VioletPrimary
+            )
+
+            PromptCard(
                 title = "Deep Code Refactoring",
                 subtitle = "Generate idiomatic Kotlin coroutines & architecture",
                 onClick = { onSelectPrompt("Review my Kotlin code structure and suggest idiomatic architectural refactorings.") },

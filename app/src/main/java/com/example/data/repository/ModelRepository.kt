@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.data.api.AiProvider
 import com.example.data.api.HcnsecApiClient
 import com.example.data.local.dao.CustomModelDao
 import com.example.data.local.entity.CustomModelEntity
@@ -52,8 +53,9 @@ class ModelRepository(
     }
 
     suspend fun refreshModels(): Result<List<AiModel>> = withContext(Dispatchers.IO) {
-        if (!apiKeyRepository.hasApiKey()) {
-            return@withContext Result.failure(Exception("No HCNSEC API Key configured"))
+        val provider = apiKeyRepository.getActiveProvider()
+        if (!apiKeyRepository.hasProviderKey(provider)) {
+            return@withContext Result.failure(Exception("No ${provider.displayName} API key configured"))
         }
 
         _isLoading.value = true
@@ -71,7 +73,7 @@ class ModelRepository(
                         isCustom = false,
                         isFavorite = false,
                         capabilities = CapabilityRegistry.detectCapabilities(dto.id),
-                        description = "Official HCNSEC model (${dto.ownedBy ?: "hcnsec"})"
+                        description = "${provider.displayName} model (${dto.ownedBy ?: provider.displayName})"
                     )
                 }.sortedBy { it.displayName }
 

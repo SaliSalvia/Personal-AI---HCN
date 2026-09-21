@@ -2,6 +2,7 @@ package com.example.data.security
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.example.data.api.AiProvider
 
 class ApiKeyRepository(context: Context) {
 
@@ -21,6 +22,7 @@ class ApiKeyRepository(context: Context) {
         private const val PREFS_NAME = "sali_hcnsec_sec_store"
         private const val KEY_CIPHERTEXT = "enc_api_key"
         private const val KEY_IV = "enc_api_iv"
+        private const val KEY_ACTIVE_PROVIDER = "active_provider"
         private const val KEY_LAST_VALIDATED = "key_last_validated"
         private const val KEY_AUTO_ROUTING = "key_auto_routing_enabled"
         private const val KEY_DEFAULT_MODEL = "key_default_model"
@@ -30,22 +32,26 @@ class ApiKeyRepository(context: Context) {
      * Saves the HCNSEC API key encrypted at rest via Android Keystore.
      */
     fun saveApiKey(apiKey: String) {
+        saveProviderKey(AiProvider.HCNSEC, apiKey)
+    }
+
+    fun saveProviderKey(provider: AiProvider, apiKey: String) {
         val trimmed = apiKey.trim()
         if (trimmed.isEmpty()) return
-        cachedApiKey = null
+        if (provider == AiProvider.HCNSEC) cachedApiKey = null
         try {
             val (ciphertext, iv) = keystoreManager.encrypt(trimmed)
             prefs.edit()
-                .putString(KEY_CIPHERTEXT, ciphertext)
-                .putString(KEY_IV, iv)
-                .putLong(KEY_LAST_VALIDATED, System.currentTimeMillis())
+                .putString(ciphertextKey(provider), ciphertext)
+                .putString(ivKey(provider), iv)
+                .putLong("${provider.name}_$KEY_LAST_VALIDATED", System.currentTimeMillis())
                 .apply()
         } catch (e: Exception) {
             // Secure fallback if keystore fails on unsupported JVM / test environments
             prefs.edit()
-                .putString(KEY_CIPHERTEXT, "PLAIN:" + trimmed)
-                .putString(KEY_IV, "")
-                .putLong(KEY_LAST_VALIDATED, System.currentTimeMillis())
+                .putString(ciphertextKey(provider), "PLAIN:" + trimmed)
+                .putString(ivKey(provider), "")
+                .putLong("${provider.name}_$KEY_LAST_VALIDATED", System.currentTimeMillis())
                 .apply()
         }
     }
@@ -53,11 +59,13 @@ class ApiKeyRepository(context: Context) {
     /**
      * Retrieves the decrypted HCNSEC API key.
      */
-    fun getApiKey(): String? {
-        cachedApiKey?.let { return it }
+    fun getApiKey(): String? = getProviderKey(AiProvider.HCNSEC)
 
-        val ciphertext = prefs.getString(KEY_CIPHERTEXT, null) ?: return null
-        val iv = prefs.getString(KEY_IV, null) ?: ""
+    fun getProviderKey(provider: AiProvider): String? {
+        if (provider == AiProvider.HCNSEC) cachedApiKey?.let { return it }
+
+        val ciphertext = prefs.getString(ciphertextKey(provider), null) ?: return null
+        val iv = prefs.getString(ivKey(provider), null) ?: ""
 
         val resolved = if (ciphertext.startsWith("PLAIN:")) {
             ciphertext.removePrefix("PLAIN:")
@@ -70,29 +78,41 @@ class ApiKeyRepository(context: Context) {
         }
 
         if (resolved != null) {
-            cachedApiKey = resolved
+            if (provider == AiProvider.HCNSEC) cachedApiKey = resolved
         }
         return resolved
     }
 
-    fun hasApiKey(): Boolean {
-        return prefs.contains(KEY_CIPHERTEXT) && !getApiKey().isNullOrBlank()
+    fun hasApiKey(): Boolean = hasProviderKey(AiProvider.HCNSEC)
+
+    fun hasProviderKey(provider: AiProvider): Boolean = !getProviderKey(provider).isNullOrBlank()
+
+    fun getActiveProvider(): AiProvider = prefs.getString(KEY_ACTIVE_PROVIDER, AiProvider.HCNSEC.name)
+        ?.let { runCatching { AiProvider.valueOf(it) }.getOrDefault(AiProvider.HCNSEC) }
+        ?: AiProvider.HCNSEC
+
+    fun setActiveProvider(provider: AiProvider) {
+        prefs.edit().putString(KEY_ACTIVE_PROVIDER, provider.name).apply()
     }
 
-    fun clearApiKey() {
-        cachedApiKey = null
+    fun clearApiKey() = clearProviderKey(AiProvider.HCNSEC)
+
+    fun clearProviderKey(provider: AiProvider) {
+        if (provider == AiProvider.HCNSEC) cachedApiKey = null
         prefs.edit()
-            .remove(KEY_CIPHERTEXT)
-            .remove(KEY_IV)
-            .remove(KEY_LAST_VALIDATED)
+            .remove(ciphertextKey(provider))
+            .remove(ivKey(provider))
+            .remove("${provider.name}_$KEY_LAST_VALIDATED")
             .apply()
     }
 
     /**
      * Returns a masked representation of the API key for safe UI display (e.g. sk-••••••••••••ab12).
      */
-    fun getMaskedApiKey(): String {
-        val key = getApiKey() ?: return "No key configured"
+    fun getMaskedApiKey(): String = getMaskedProviderKey(AiProvider.HCNSEC)
+
+    fun getMaskedProviderKey(provider: AiProvider): String {
+        val key = getProviderKey(provider) ?: return "No key configured"
         if (key.length <= 8) return "••••••••"
         val prefix = key.take(4)
         val suffix = key.takeLast(4)
@@ -115,4 +135,7 @@ class ApiKeyRepository(context: Context) {
     fun setDefaultModel(modelId: String) {
         prefs.edit().putString(KEY_DEFAULT_MODEL, modelId).apply()
     }
+
+    private fun ciphertextKey(provider: AiProvider) = if (provider == AiProvider.HCNSEC) KEY_CIPHERTEXT else "${provider.name}_$KEY_CIPHERTEXT"
+    private fun ivKey(provider: AiProvider) = if (provider == AiProvider.HCNSEC) KEY_IV else "${provider.name}_$KEY_IV"
 }
