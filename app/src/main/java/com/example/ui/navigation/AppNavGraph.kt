@@ -2,7 +2,12 @@ package com.example.ui.navigation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -10,7 +15,10 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.example.data.settings.AppLanguage
 import com.example.di.AppContainer
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.localization.rememberAppStrings
 import com.example.ui.screens.chat.ChatScreen
 import com.example.ui.screens.chat.ChatViewModel
 import com.example.ui.screens.onboarding.OnboardingScreen
@@ -25,21 +33,28 @@ fun AppNavGraph(
     appContainer: AppContainer,
     navController: NavHostController = rememberNavController()
 ) {
-    // Resolved once. hasApiKey() reads SharedPreferences and, on first use, the
-    // hardware backed AndroidKeyStore - it must not run on every recomposition.
+    val language by appContainer.languageRepository.language.collectAsState()
+    val strings = rememberAppStrings(language)
+    val layoutDirection = if (language == AppLanguage.PERSIAN) LayoutDirection.Rtl else LayoutDirection.Ltr
+
+    CompositionLocalProvider(
+        LocalAppStrings provides strings,
+        LocalLayoutDirection provides layoutDirection
+    ) {
+        AppNavContent(appContainer, navController)
+    }
+}
+
+@Composable
+private fun AppNavContent(
+    appContainer: AppContainer,
+    navController: NavHostController
+) {
     val startDestination = remember {
-        if (appContainer.apiKeyRepository.hasApiKey()) {
-            Screen.Chat.createRoute()
-        } else {
-            Screen.Onboarding.route
-        }
+        if (appContainer.apiKeyRepository.hasApiKey()) Screen.Chat.createRoute() else Screen.Onboarding.route
     }
 
-    NavHost(
-        navController = navController,
-        startDestination = startDestination
-    ) {
-        // ONBOARDING SCREEN
+    NavHost(navController = navController, startDestination = startDestination) {
         composable(Screen.Onboarding.route) {
             val onboardingViewModel: OnboardingViewModel = viewModel(
                 factory = OnboardingViewModel.Factory(
@@ -48,7 +63,6 @@ fun AppNavGraph(
                     modelRepository = appContainer.modelRepository
                 )
             )
-
             OnboardingScreen(
                 viewModel = onboardingViewModel,
                 onConnected = {
@@ -59,25 +73,15 @@ fun AppNavGraph(
             )
         }
 
-        // CHAT SCREEN
         composable(
             route = "chat?conversationId={conversationId}&workspaceId={workspaceId}",
             arguments = listOf(
-                navArgument("conversationId") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                },
-                navArgument("workspaceId") {
-                    type = NavType.StringType
-                    nullable = true
-                    defaultValue = null
-                }
+                navArgument("conversationId") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("workspaceId") { type = NavType.StringType; nullable = true; defaultValue = null }
             )
         ) { backStackEntry ->
             val convId = backStackEntry.arguments?.getString("conversationId")
             val wsId = backStackEntry.arguments?.getString("workspaceId")
-
             val chatViewModel: ChatViewModel = viewModel(
                 factory = ChatViewModel.Factory(
                     chatRepository = appContainer.chatRepository,
@@ -87,51 +91,29 @@ fun AppNavGraph(
                     apiKeyRepository = appContainer.apiKeyRepository
                 )
             )
-
-            // Side effects belong in an effect, not in composition: calling this
-            // directly created a brand new conversation on every recomposition of
-            // the chat destination while the first one was still being created.
-            LaunchedEffect(convId, wsId) {
-                chatViewModel.initConversation(convId, wsId)
-            }
-
+            LaunchedEffect(convId, wsId) { chatViewModel.initConversation(convId, wsId) }
             ChatScreen(
                 viewModel = chatViewModel,
-                onNavigateToWorkspace = { targetWorkspaceId ->
-                    navController.navigate(Screen.WorkspaceDetail.createRoute(targetWorkspaceId))
-                },
-                onNavigateToSettings = {
-                    navController.navigate(Screen.Settings.route)
-                }
+                onNavigateToWorkspace = { navController.navigate(Screen.WorkspaceDetail.createRoute(it)) },
+                onNavigateToSettings = { navController.navigate(Screen.Settings.route) }
             )
         }
 
-        // WORKSPACE DETAIL SCREEN
         composable(
             route = Screen.WorkspaceDetail.route,
-            arguments = listOf(
-                navArgument("workspaceId") { type = NavType.StringType }
-            )
+            arguments = listOf(navArgument("workspaceId") { type = NavType.StringType })
         ) { backStackEntry ->
             val wsId = backStackEntry.arguments?.getString("workspaceId").orEmpty()
-
             val workspaceViewModel: WorkspaceViewModel = viewModel(
-                factory = WorkspaceViewModel.Factory(
-                    workspaceId = wsId,
-                    workspaceRepository = appContainer.workspaceRepository
-                )
+                factory = WorkspaceViewModel.Factory(wsId, appContainer.workspaceRepository)
             )
-
             WorkspaceScreen(
                 viewModel = workspaceViewModel,
                 onNavigateBack = { navController.popBackStack() },
-                onOpenInChat = { targetWsId ->
-                    navController.navigate(Screen.Chat.createRoute(workspaceId = targetWsId))
-                }
+                onOpenInChat = { navController.navigate(Screen.Chat.createRoute(workspaceId = it)) }
             )
         }
 
-        // SETTINGS SCREEN
         composable(Screen.Settings.route) {
             val settingsViewModel: SettingsViewModel = viewModel(
                 factory = SettingsViewModel.Factory(
@@ -140,14 +122,12 @@ fun AppNavGraph(
                     modelRepository = appContainer.modelRepository
                 )
             )
-
             SettingsScreen(
                 viewModel = settingsViewModel,
+                languageRepository = appContainer.languageRepository,
                 onNavigateBack = { navController.popBackStack() },
                 onLoggedOut = {
-                    navController.navigate(Screen.Onboarding.route) {
-                        popUpTo(0) { inclusive = true }
-                    }
+                    navController.navigate(Screen.Onboarding.route) { popUpTo(0) { inclusive = true } }
                 }
             )
         }
