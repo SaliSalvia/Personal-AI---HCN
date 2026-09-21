@@ -5,10 +5,10 @@ Personal AI Assistant powered exclusively by your **HCNSEC API** (`https://api.h
 ---
 
 ## ✨ Features
-- **Exclusively HCNSEC Powered:** Direct streaming integration with official OpenAI-compatible endpoint `https://api.hcnsec.cn/v1/chat/completions`.
+- **Multi-provider AI:** HCNSEC remains the default provider, with encrypted support for Google AI Studio/Gemini, Groq, and OpenRouter. Provider keys are detected from common prefixes and validated before activation.
 - **Reasoning Process Display:** Collapsible visual accordion for DeepSeek-R1 / HCNSEC reasoning tokens (`reasoning_content`).
 - **ZIP Workspace & Codebase Analysis:** Upload ZIP files directly to extract code trees and conduct holistic architectural discussions.
-- **Hardware-Backed KeyStore Security:** User API keys are securely encrypted on-device with AES-GCM and MasterKeys.
+- **Hardware-Backed KeyStore Security:** User API keys for every provider are securely encrypted on-device with AES-GCM and Android Keystore.
 - **Export & Regeneration:** One-click Markdown export to clipboard, response regeneration, and copyable code blocks with language indicators.
 - **Zero-Bug Material 3 Design:** Edge-to-edge support, custom dark theme (`#0B0C10`, `#14151F`, `#8B5CF6`), and smooth auto-scrolling.
 

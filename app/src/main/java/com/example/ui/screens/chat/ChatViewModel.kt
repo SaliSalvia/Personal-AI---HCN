@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+import java.util.zip.ZipInputStream
 
 class ChatViewModel(
     private val chatRepository: ChatRepository,
@@ -329,6 +330,16 @@ class ChatViewModel(
                                 _errorMessage.value = "ZIP extraction failed: ${err.message}"
                             }
                         )
+                    } else if (mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || filename.endsWith(".docx", ignoreCase = true)) {
+                        val textContent = contentResolver.openInputStream(uri)?.use { extractDocxText(it) }
+                        _attachments.value = _attachments.value + AttachmentItem(
+                            id = UUID.randomUUID().toString(),
+                            name = filename,
+                            mimeType = mimeType,
+                            sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
+                            extractedText = textContent,
+                            status = AttachmentStatus.READY
+                        )
                     } else if (mimeType == "application/pdf" || filename.endsWith(".pdf", ignoreCase = true)) {
                         val result = sourceDocumentRepository.importPdf(
                             uri = uri,
@@ -382,6 +393,30 @@ class ChatViewModel(
         }
     }
 
+    /** Extracts readable paragraphs from a DOCX without adding a heavyweight office suite dependency. */
+    private fun extractDocxText(input: java.io.InputStream): String {
+        val documentXml = ZipInputStream(input).use { zip ->
+            var found: String? = null
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (entry.name == "word/document.xml") {
+                    found = zip.readBytes().toString(Charsets.UTF_8)
+                    break
+                }
+                entry = zip.nextEntry
+            }
+            found.orEmpty()
+        }
+        return documentXml
+            .replace(Regex("</w:p>"), "\\n")
+            .replace(Regex("<w:tab[^>]*/>"), "\\t")
+            .replace(Regex("<[^>]+>"), "")
+            .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+            .replace(Regex("\\n{3,}"), "\\n\\n")
+            .trim()
+            .take(MAX_TEXT_ATTACHMENT_BYTES.toInt())
+    }
+
     private fun getFileName(context: Context, uri: Uri): String? {
         var name: String? = null
         val cursor = context.contentResolver.query(uri, null, null, null, null)
@@ -423,7 +458,10 @@ class ChatViewModel(
 
         val promptToSend = if (text.isEmpty() && currentAttach.isNotEmpty()) {
             val firstZip = currentAttach.firstOrNull { it.isZipWorkspace }
-            if (firstZip != null) {
+            val zipVersions = currentAttach.filter { it.isZipWorkspace }
+            if (zipVersions.size > 1) {
+                "Compare these ${zipVersions.size} project versions in depth. Rank them, identify regressions and strengths, list compatible features, and propose a concrete golden merge plan with file-level changes and validation steps."
+            } else if (firstZip != null) {
                 "Please analyze this uploaded workspace (${firstZip.name}), describe its architecture, key components, and entry points."
             } else {
                 "Please analyze the attached file(s) (${currentAttach.joinToString { it.name }})."
@@ -451,6 +489,7 @@ class ChatViewModel(
                     availableModels = availableModels.value,
                     attachments = currentAttach,
                     workspaceId = _activeWorkspaceId.value,
+                    workspaceIds = currentAttach.mapNotNull { it.workspaceId },
                     onChunkReceived = ::onStreamChunk,
                     onError = { err ->
                         endStreaming()

@@ -30,7 +30,19 @@ class HcnsecApiClient(
 ) {
     companion object {
         const val BASE_URL = "https://api.hcnsec.cn/v1"
+        private const val GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+        private const val OPEN_ROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+        private const val GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+    }
+
+    private fun activeProvider(): AiProvider = apiKeyRepository.getActiveProvider()
+
+    private fun baseUrl(provider: AiProvider): String = when (provider) {
+        AiProvider.GROQ -> GROQ_BASE_URL
+        AiProvider.OPEN_ROUTER -> OPEN_ROUTER_BASE_URL
+        AiProvider.GOOGLE_AI_STUDIO -> GEMINI_BASE_URL
+        AiProvider.HCNSEC -> BASE_URL
     }
 
     // Every DTO is annotated with @JsonClass(generateAdapter = true), so the KSP
@@ -39,7 +51,8 @@ class HcnsecApiClient(
     private val moshi: Moshi = Moshi.Builder().build()
 
     private val authInterceptor = Interceptor { chain ->
-        val apiKey = apiKeyRepository.getApiKey() ?: ""
+        val provider = activeProvider()
+        val apiKey = apiKeyRepository.getProviderKey(provider) ?: ""
         val originalRequest = chain.request()
         val authenticatedRequest = originalRequest.newBuilder()
             .header("Authorization", "Bearer $apiKey")
@@ -68,8 +81,16 @@ class HcnsecApiClient(
      */
     suspend fun validateApiKey(keyToTest: String): Result<List<HcnsecModelDto>> = withContext(Dispatchers.IO) {
         try {
+            val provider = activeProvider()
+            if (provider == AiProvider.GOOGLE_AI_STUDIO) {
+                val request = Request.Builder().url("$GEMINI_BASE_URL/models?key=${java.net.URLEncoder.encode(keyToTest.trim(), "UTF-8")}").get().build()
+                OkHttpClient().newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@withContext Result.failure(Exception("Google AI Studio key was rejected (HTTP ${response.code})."))
+                    return@withContext Result.success(listOf("gemini-2.5-flash", "gemini-2.5-pro").map { HcnsecModelDto(it, ownedBy = "Google") })
+                }
+            }
             val request = Request.Builder()
-                .url("$BASE_URL/models")
+                .url("${baseUrl(activeProvider())}/models")
                 .header("Authorization", "Bearer ${keyToTest.trim()}")
                 .get()
                 .build()
@@ -100,8 +121,15 @@ class HcnsecApiClient(
      */
     suspend fun getModels(): Result<List<HcnsecModelDto>> = withContext(Dispatchers.IO) {
         try {
+            val provider = activeProvider()
+            if (provider == AiProvider.GOOGLE_AI_STUDIO) {
+                return@withContext Result.success(listOf(
+                    HcnsecModelDto("gemini-2.5-flash", ownedBy = "Google"),
+                    HcnsecModelDto("gemini-2.5-pro", ownedBy = "Google")
+                ))
+            }
             val request = Request.Builder()
-                .url("$BASE_URL/models")
+                .url("${baseUrl(activeProvider())}/models")
                 .get()
                 .build()
 
@@ -128,6 +156,10 @@ class HcnsecApiClient(
         messages: List<ChatMessageDto>,
         temperature: Double = 0.7
     ): Flow<StreamEvent> = flow {
+        if (activeProvider() == AiProvider.GOOGLE_AI_STUDIO) {
+            streamGemini(model, messages, temperature).collect { emit(it) }
+            return@flow
+        }
         val requestBodyJson = chatRequestAdapter.toJson(
             ChatCompletionRequest(
                 model = model,
@@ -138,7 +170,7 @@ class HcnsecApiClient(
         )
 
         val request = Request.Builder()
-            .url("$BASE_URL/chat/completions")
+            .url("${baseUrl(activeProvider())}/chat/completions")
             .post(requestBodyJson.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
@@ -240,7 +272,7 @@ class HcnsecApiClient(
             )
 
             val request = Request.Builder()
-                .url("$BASE_URL/chat/completions")
+                .url("${baseUrl(activeProvider())}/chat/completions")
                 .post(requestBodyJson.toRequestBody(JSON_MEDIA_TYPE))
                 .build()
 
@@ -290,6 +322,57 @@ class HcnsecApiClient(
             Result.success(null)
         }
     }
+
+    private fun streamGemini(
+        model: String,
+        messages: List<ChatMessageDto>,
+        temperature: Double
+    ): Flow<StreamEvent> = flow {
+        val key = apiKeyRepository.getProviderKey(AiProvider.GOOGLE_AI_STUDIO)
+            ?: run { emit(StreamEvent.Error("Google AI Studio API key is not configured.")); return@flow }
+        val contents = org.json.JSONArray()
+        messages.filter { it.role != "system" }.forEach { message ->
+            contents.put(org.json.JSONObject().apply {
+                put("role", if (message.role == "assistant") "model" else "user")
+                put("parts", org.json.JSONArray().put(org.json.JSONObject().put("text", message.content)))
+            })
+        }
+        val body = org.json.JSONObject().apply {
+            put("contents", contents)
+            put("generationConfig", org.json.JSONObject().put("temperature", temperature))
+        }.toString()
+        val request = Request.Builder()
+            .url("$GEMINI_BASE_URL/models/$model:streamGenerateContent?alt=sse&key=${java.net.URLEncoder.encode(key, "UTF-8")}")
+            .post(body.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    emit(StreamEvent.Error("Google AI Studio request failed (HTTP ${response.code}).", response.code))
+                    return@flow
+                }
+                response.body?.byteStream()?.bufferedReader()?.use { reader ->
+                    var line: String?
+                    while (reader.readLine().also { line = it } != null) {
+                        val current = line.orEmpty()
+                        if (!current.startsWith("data:")) continue
+                        try {
+                            val json = org.json.JSONObject(current.removePrefix("data:").trim())
+                            val text = json.optJSONArray("candidates")?.optJSONObject(0)
+                                ?.optJSONObject("content")?.optJSONArray("parts")?.optJSONObject(0)
+                                ?.optString("text").orEmpty()
+                            if (text.isNotEmpty()) emit(StreamEvent.Content(text))
+                        } catch (_: Exception) { }
+                    }
+                }
+                emit(StreamEvent.Completed("stop", null))
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            emit(StreamEvent.Error(formatNetworkError(e)))
+        }
+    }.flowOn(Dispatchers.IO)
 
     private fun parseErrorMessage(code: Int, bodyString: String): String {
         return try {

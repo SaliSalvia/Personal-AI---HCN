@@ -61,9 +61,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.api.AiProvider
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -93,6 +95,11 @@ fun SettingsScreen(
     var newKeyInput by remember { mutableStateOf("") }
     var changeKeyError by remember { mutableStateOf<String?>(null) }
     var isUpdatingKey by remember { mutableStateOf(false) }
+    val activeProvider by viewModel.activeProvider.collectAsState()
+    var providerDialog by remember { mutableStateOf<AiProvider?>(null) }
+    var providerKeyInput by remember { mutableStateOf("") }
+    var providerError by remember { mutableStateOf<String?>(null) }
+    var isSavingProvider by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -289,7 +296,58 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // SECTION 2: INTELLIGENT ROUTING & PREFERENCES
+            // SECTION 2: ADDITIONAL AI PROVIDERS
+            Text(
+                text = "ADDITIONAL AI PROVIDERS",
+                color = VioletLight,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.5.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp)),
+                shape = RoundedCornerShape(14.dp),
+                color = DarkSurface
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        "Paste a provider key below. SALi detects Google AI Studio (AIza…), Groq (gsk_…) and OpenRouter (sk-or-…) automatically, validates it, and stores it encrypted.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    AiProvider.values().filter { it != AiProvider.HCNSEC }.forEach { provider ->
+                        val configured = viewModel.providerKeyStatus(provider) != "No key configured"
+                        Button(
+                            onClick = {
+                                providerDialog = provider
+                                providerKeyInput = ""
+                                providerError = null
+                            },
+                            modifier = Modifier.fillMaxWidth().height(42.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (activeProvider == provider) VioletPrimary else DarkSurfaceVariant
+                            ),
+                            shape = RoundedCornerShape(9.dp)
+                        ) {
+                            Text(
+                                "${provider.displayName}${if (configured) "  •  Configured" else "  •  Add key"}",
+                                color = TextPrimary,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+
+            // SECTION 3: INTELLIGENT ROUTING & PREFERENCES
             Text(
                 text = "ROUTING & MODEL PREFERENCES",
                 color = VioletLight,
@@ -432,6 +490,65 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(40.dp))
         }
+    }
+
+    // Additional provider key dialog. Detection is performed again in the ViewModel
+    // so a pasted key is never silently stored under the wrong provider.
+    providerDialog?.let { requestedProvider ->
+        AlertDialog(
+            onDismissRequest = { if (!isSavingProvider) providerDialog = null },
+            title = { Text("Connect ${requestedProvider.displayName}", color = TextPrimary) },
+            text = {
+                Column {
+                    Text(requestedProvider.description, color = TextSecondary, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = providerKeyInput,
+                        onValueChange = { providerKeyInput = it; providerError = null },
+                        placeholder = { Text("Paste API key", color = Color(0xFF64748B)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        visualTransformation = PasswordVisualTransformation(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedBorderColor = VioletPrimary,
+                            unfocusedBorderColor = DarkBorder
+                        )
+                    )
+                    if (providerError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(providerError!!, color = ErrorRed, fontSize = 12.sp)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = providerKeyInput.isNotBlank() && !isSavingProvider,
+                    onClick = {
+                        isSavingProvider = true
+                        viewModel.saveProviderKey(
+                            requestedProvider,
+                            providerKeyInput,
+                            onSuccess = {
+                                isSavingProvider = false
+                                providerDialog = null
+                                providerKeyInput = ""
+                            },
+                            onError = {
+                                isSavingProvider = false
+                                providerError = it
+                            }
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary)
+                ) { Text(if (isSavingProvider) "Checking…" else "Detect & Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { providerDialog = null }) { Text("Cancel", color = TextSecondary) }
+            },
+            containerColor = DarkSurface
+        )
     }
 
     // Update API Key Dialog
