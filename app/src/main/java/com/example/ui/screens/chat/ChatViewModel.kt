@@ -46,6 +46,17 @@ class ChatViewModel(
 
         /** Hard cap for a single non-ZIP attachment read into memory. */
         private const val MAX_TEXT_ATTACHMENT_BYTES = 2L * 1024 * 1024
+
+        /** Cap for `word/document.xml`, which is unzipped straight into memory. */
+        private const val MAX_DOCX_XML_BYTES = 4L * 1024 * 1024
+
+        /** Attachments that are safe to read as UTF-8 text and send to the model. */
+        private val TEXT_EXTENSIONS = setOf(
+            "txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "tsv",
+            "log", "ini", "conf", "properties", "gradle", "kts", "kt", "java", "py",
+            "js", "ts", "jsx", "tsx", "c", "h", "cpp", "cs", "go", "rs", "swift",
+            "dart", "html", "css", "scss", "sql", "sh", "toml"
+        )
     }
 
     private val _currentConversationId = MutableStateFlow<String?>(null)
@@ -208,6 +219,9 @@ class ChatViewModel(
     fun loadConversation(conversationId: String) {
         _currentConversationId.value = conversationId
         _errorMessage.value = null
+        // The agent trace belongs to a single run; without this the previous
+        // conversation's steps were still rendered after switching chats.
+        chatRepository.clearTrace()
         messagesObservationJob?.cancel()
         messagesObservationJob = viewModelScope.launch {
             // Restore draft text if available
@@ -359,6 +373,11 @@ class ChatViewModel(
                             },
                             onFailure = { throw it }
                         )
+                    } else if (!isTextLike(mimeType, filename)) {
+                        // Binary formats (xlsx, apk, images, …) would be decoded as
+                        // mojibake and then injected into the prompt as noise.
+                        _errorMessage.value =
+                            "Unsupported file type for $filename. Text, code, Markdown, PDF, DOCX and ZIP are supported."
                     } else {
                         // Regular text/code/doc attachment (capped so a huge file
                         // cannot exhaust the heap of a low end device).
@@ -393,6 +412,16 @@ class ChatViewModel(
         }
     }
 
+    /**
+     * True when the MIME type or extension says the payload is text. Everything
+     * else is rejected instead of being silently decoded as UTF-8 garbage.
+     */
+    private fun isTextLike(mimeType: String, filename: String): Boolean {
+        if (mimeType.startsWith("text/")) return true
+        if (mimeType.contains("json") || mimeType.contains("xml")) return true
+        return filename.substringAfterLast('.', "").lowercase() in TEXT_EXTENSIONS
+    }
+
     /** Extracts readable paragraphs from a DOCX without adding a heavyweight office suite dependency. */
     private fun extractDocxText(input: java.io.InputStream): String {
         val documentXml = ZipInputStream(input).use { zip ->
@@ -400,7 +429,9 @@ class ChatViewModel(
             var entry = zip.nextEntry
             while (entry != null) {
                 if (entry.name == "word/document.xml") {
-                    found = zip.readBytes().toString(Charsets.UTF_8)
+                    // A DOCX is untrusted input: an oversized (or zip-bombed)
+                    // document.xml must not be read into memory unbounded.
+                    found = zip.readBoundedText(MAX_DOCX_XML_BYTES)
                     break
                 }
                 entry = zip.nextEntry
@@ -415,6 +446,21 @@ class ChatViewModel(
             .replace(Regex("\\n{3,}"), "\\n\\n")
             .trim()
             .take(MAX_TEXT_ATTACHMENT_BYTES.toInt())
+    }
+
+    /** Reads at most [maxBytes] from the current ZIP entry instead of the whole entry. */
+    private fun ZipInputStream.readBoundedText(maxBytes: Long): String {
+        val out = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (total < maxBytes) {
+            val read = read(buffer)
+            if (read == -1) break
+            val usable = minOf(read.toLong(), maxBytes - total).toInt()
+            out.write(buffer, 0, usable)
+            total += usable
+        }
+        return out.toString(Charsets.UTF_8.name())
     }
 
     private fun getFileName(context: Context, uri: Uri): String? {
@@ -455,6 +501,9 @@ class ChatViewModel(
         val convId = _currentConversationId.value ?: return
 
         if (text.isEmpty() && currentAttach.isEmpty()) return
+        // A second stream would reset the shared streaming buffer and orphan the
+        // running job, so a double tap must not start another generation.
+        if (isGenerating.value) return
 
         val promptToSend = if (text.isEmpty() && currentAttach.isNotEmpty()) {
             val firstZip = currentAttach.firstOrNull { it.isZipWorkspace }
@@ -532,6 +581,7 @@ class ChatViewModel(
         val currentMsgs = _messages.value
         val lastUserMsg = currentMsgs.findLast { it.role == "user" } ?: return
         val convId = _currentConversationId.value ?: return
+        if (isGenerating.value) return
 
         _errorMessage.value = null
 
@@ -570,11 +620,11 @@ class ChatViewModel(
         val convTitle = conversations.value.find { it.id == convId }?.title ?: "Chat"
         val sb = StringBuilder()
         sb.append("# ").append(convTitle).append("\n\n")
-        sb.append("> Exported from SALi-HCNSEC • Single-provider HCNSEC AI Agent\n\n")
+        sb.append("> Exported from Salvia-H.Ai • HCNSEC-first multi-provider AI workspace\n\n")
         sb.append("---\n\n")
 
         for (msg in _messages.value) {
-            val roleLabel = if (msg.role == "user") "### 👤 User" else "### 🤖 SALi-HCNSEC"
+            val roleLabel = if (msg.role == "user") "### 👤 User" else "### 🤖 Assistant"
             sb.append(roleLabel).append("\n\n")
             if (!msg.reasoningContent.isNullOrBlank()) {
                 sb.append("<details><summary>Reasoning Process</summary>\n\n")
