@@ -9,7 +9,7 @@ Personal AI Assistant powered exclusively by your **HCNSEC API** (`https://api.h
 - **Reasoning Process Display:** Collapsible visual accordion for DeepSeek-R1 / HCNSEC reasoning tokens (`reasoning_content`).
 - **ZIP Workspace & Codebase Analysis:** Upload ZIP files directly to extract code trees and conduct holistic architectural discussions.
 - **Hardware-Backed KeyStore Security:** User API keys for every provider are securely encrypted on-device with AES-GCM and Android Keystore.
-- **Export & Regeneration:** One-click Markdown export to clipboard, response regeneration, and copyable code blocks with language indicators.
+- **Bilingual UI (EN / فارسی):** A dependency-free localization layer switches the whole interface, with automatic RTL layout, from Settings.
 - **Zero-Bug Material 3 Design:** Edge-to-edge support, custom dark theme (`#0B0C10`, `#14151F`, `#8B5CF6`), and smooth auto-scrolling.
 
 ---
@@ -19,14 +19,15 @@ Personal AI Assistant powered exclusively by your **HCNSEC API** (`https://api.h
 ### Method 1: Automatic GitHub Actions (recommended)
 Every push to `main` or `arena/01a0abb1-personal-ai-hcn` runs `.github/workflows/build-apk.yml`, which:
 
-1. Installs JDK 17 + the Android SDK packages on the runner.
+1. Installs JDK 21 + the Android SDK packages on the runner (JDK 21 is required by Robolectric 4.16 to emulate SDK 36).
 2. Runs the unit tests (`:app:testDebugUnitTest`).
 3. Builds a **minified, resource-shrunk, signed release APK** (`:app:assembleRelease`).
 4. Verifies the signature with `apksigner` and uploads `Sali-HCNSEC-Release-APK`.
 
 Download `app-release.apk` from the **Actions** tab (artifact) or from the GitHub
-**Release** that the workflow publishes. A machine readable summary of the last
-build (size, SHA-256, signature, log tail) is written to `ci/last-build.json`.
+**Release** that the workflow publishes. Each release note carries the build report
+for that run: commit, APK size, SHA-256, signature, R8 keep-rule check, the test
+results and the tail of the release build log.
 
 > This repository has no `gradlew` wrapper jar, so the workflow provisions Gradle
 > 9.3.1 directly instead of calling `./gradlew`.
@@ -60,6 +61,8 @@ The release build is tuned for smooth playback of streamed answers on mid/low-en
   assistant bubble recomposes in its own scope.
 - Markdown/syntax highlighting patterns are pre-compiled; inline markdown is cached.
 - Large launcher artwork is stored as WebP; the unused Firebase/AppCheck stack is gone.
+- The HTTP layer speaks OkHttp + Moshi directly, so the unused Retrofit, Moshi
+  converter and request-logging interceptor are no longer packaged.
 - The API key is decrypted from the AndroidKeyStore once per process, not per request.
 
 # Build outputs are published as a GitHub Release asset plus a git blob.

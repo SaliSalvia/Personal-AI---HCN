@@ -27,10 +27,6 @@ class AppContainer(context: Context) {
         HcnsecApiClient(apiKeyRepository)
     }
 
-    val apiService by lazy {
-        com.example.data.api.HcnsecApiFactory.createService(apiKeyRepository)
-    }
-
     val database by lazy {
         AppDatabase.getInstance(appContext)
     }

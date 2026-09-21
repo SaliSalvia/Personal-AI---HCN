@@ -94,8 +94,9 @@ secrets {
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
 
-// Some unused dependencies are commented out below instead of being removed.
-// This makes it easy to add them back in the future if needed.
+// The HCNSEC client speaks HTTP through OkHttp + Moshi directly, so the Retrofit
+// layer (retrofit, converter-moshi, logging-interceptor) and the unused image
+// loader were removed instead of being shipped as dead weight in the APK.
 dependencies {
   implementation(platform(libs.androidx.compose.bom))
   // implementation(libs.accompanist.permissions)
@@ -118,9 +119,9 @@ dependencies {
   implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
+  // Moshi is now declared directly: it used to arrive transitively through
+  // converter-moshi, which is gone along with the unused Retrofit layer.
+  implementation(libs.moshi)
   // Uncomment to use Firestore:
   // implementation(libs.firebase.firestore)
 
@@ -132,10 +133,8 @@ dependencies {
   // implementation(libs.googleid)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
   implementation(libs.okhttp)
   // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
   implementation(libs.pdfbox.android)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)

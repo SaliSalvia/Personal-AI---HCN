@@ -72,7 +72,6 @@ class HcnsecApiClient(
 
     private val modelListAdapter = moshi.adapter(HcnsecModelListResponse::class.java)
     private val chatRequestAdapter = moshi.adapter(ChatCompletionRequest::class.java)
-    private val chatResponseAdapter = moshi.adapter(ChatCompletionResponse::class.java)
     private val streamChunkAdapter = moshi.adapter(ChatStreamChunkDto::class.java)
     private val errorAdapter = moshi.adapter(ApiErrorResponse::class.java)
 
@@ -83,7 +82,13 @@ class HcnsecApiClient(
         try {
             val provider = activeProvider()
             if (provider == AiProvider.GOOGLE_AI_STUDIO) {
-                val request = Request.Builder().url("$GEMINI_BASE_URL/models?key=${java.net.URLEncoder.encode(keyToTest.trim(), "UTF-8")}").get().build()
+                // The key travels in a header rather than a query string so it never
+                // ends up in proxy logs, crash reports or URL history.
+                val request = Request.Builder()
+                    .url("$GEMINI_BASE_URL/models")
+                    .header("x-goog-api-key", keyToTest.trim())
+                    .get()
+                    .build()
                 OkHttpClient().newCall(request).execute().use { response ->
                     if (!response.isSuccessful) return@withContext Result.failure(Exception("Google AI Studio key was rejected (HTTP ${response.code})."))
                     return@withContext Result.success(listOf("gemini-2.5-flash", "gemini-2.5-pro").map { HcnsecModelDto(it, ownedBy = "Google") })
@@ -254,49 +259,6 @@ class HcnsecApiClient(
     }.flowOn(Dispatchers.IO)
 
     /**
-     * Non-streaming completion call for quick extraction or summary tasks.
-     */
-    suspend fun chatCompletion(
-        model: String,
-        messages: List<ChatMessageDto>,
-        temperature: Double = 0.5
-    ): Result<ChatResponseMessageDto> = withContext(Dispatchers.IO) {
-        try {
-            val requestBodyJson = chatRequestAdapter.toJson(
-                ChatCompletionRequest(
-                    model = model,
-                    messages = messages,
-                    stream = false,
-                    temperature = temperature
-                )
-            )
-
-            val request = Request.Builder()
-                .url("${baseUrl(activeProvider())}/chat/completions")
-                .post(requestBodyJson.toRequestBody(JSON_MEDIA_TYPE))
-                .build()
-
-            okHttpClient.newCall(request).execute().use { response ->
-                val bodyString = response.body?.string().orEmpty()
-                if (response.isSuccessful) {
-                    val parsed = chatResponseAdapter.fromJson(bodyString)
-                    val choice = parsed?.choices?.firstOrNull()?.message
-                    if (choice != null) {
-                        Result.success(choice)
-                    } else {
-                        Result.failure(Exception("No completion choices returned by model"))
-                    }
-                } else {
-                    val errorMsg = parseErrorMessage(response.code, bodyString)
-                    Result.failure(Exception(errorMsg))
-                }
-            }
-        } catch (e: Exception) {
-            Result.failure(Exception(formatNetworkError(e)))
-        }
-    }
-
-    /**
      * Attempts to retrieve account balance or usage from official HCNSEC endpoints if supported.
      * Per rule: "Do not scrape or reverse-engineer undocumented private endpoints.
      * If balance cannot be retrieved through an official API endpoint, clearly communicate that limitation."
@@ -342,7 +304,8 @@ class HcnsecApiClient(
             put("generationConfig", org.json.JSONObject().put("temperature", temperature))
         }.toString()
         val request = Request.Builder()
-            .url("$GEMINI_BASE_URL/models/$model:streamGenerateContent?alt=sse&key=${java.net.URLEncoder.encode(key, "UTF-8")}")
+            .url("$GEMINI_BASE_URL/models/$model:streamGenerateContent?alt=sse")
+            .header("x-goog-api-key", key)
             .post(body.toRequestBody(JSON_MEDIA_TYPE))
             .build()
         try {
@@ -375,29 +338,33 @@ class HcnsecApiClient(
     }.flowOn(Dispatchers.IO)
 
     private fun parseErrorMessage(code: Int, bodyString: String): String {
+        // The active provider can be Groq/OpenRouter/Gemini, so blaming HCNSEC for
+        // every failure sent users to the wrong settings screen.
+        val provider = activeProvider().displayName
         return try {
             val errorObj = errorAdapter.fromJson(bodyString)
             val msg = errorObj?.error?.message
             when (code) {
-                401 -> "Invalid HCNSEC API Key. Please verify your credentials in Settings."
-                403 -> "Access forbidden for this HCNSEC model or resource."
-                429 -> "Rate limit reached on HCNSEC API. Please wait a moment before sending more messages."
-                500, 502, 503 -> "HCNSEC server error ($code). The service is currently experiencing high load."
+                401 -> "Invalid $provider API key. Please verify your credentials in Settings."
+                403 -> "Access forbidden for this $provider model or resource."
+                429 -> "Rate limit reached on the $provider API. Please wait a moment before sending more messages."
+                500, 502, 503 -> "$provider server error ($code). The service is currently experiencing high load."
                 else -> msg ?: "HTTP $code: Request failed."
             }
         } catch (_: Exception) {
             when (code) {
-                401 -> "Invalid HCNSEC API Key."
-                429 -> "HCNSEC Rate limit exceeded."
+                401 -> "Invalid $provider API key."
+                429 -> "$provider rate limit exceeded."
                 else -> "Server returned error code $code"
             }
         }
     }
 
     private fun formatNetworkError(e: Throwable): String {
+        val provider = activeProvider().displayName
         return when (e) {
             is java.net.UnknownHostException -> "Network unavailable. Please check your internet connection."
-            is java.net.SocketTimeoutException -> "Request timed out while connecting to HCNSEC."
+            is java.net.SocketTimeoutException -> "Request timed out while connecting to $provider."
             is IOException -> "Connection interrupted: ${e.localizedMessage ?: "I/O error"}"
             else -> e.localizedMessage ?: "An unexpected error occurred."
         }
