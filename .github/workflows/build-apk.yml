@@ -56,8 +56,10 @@ jobs:
 
       # The repository has no gradle wrapper jar, so Gradle is provisioned
       # explicitly at the version pinned in gradle/wrapper/gradle-wrapper.properties.
+      # setup-gradle v4 caches the Gradle distribution and dependency downloads
+      # between runs, which cuts several minutes off the cold build.
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
 
@@ -87,9 +89,9 @@ jobs:
           fi
           ls -l release.keystore
 
+      # Blocking gate: the release APK is only built from a green test run.
       - name: Unit Tests
         shell: bash
-        continue-on-error: true
         run: gradle :app:testDebugUnitTest --no-daemon --stacktrace 2>&1 | tee build-test.log
 
       - name: Build Release APK

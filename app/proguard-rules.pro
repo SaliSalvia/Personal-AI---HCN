@@ -42,6 +42,12 @@
 -keep class * extends androidx.room.RoomDatabase { <init>(); }
 -dontwarn androidx.room.paging.**
 
+# --- PDFBox Android -----------------------------------------------------------
+# JPXFilter has an optional hard dependency on the JPEG2000 decoder library
+# (com.gemalto.jp2). It is only exercised when decoding JPX images inside a
+# PDF, which PDFBox-Android handles gracefully at runtime when absent.
+-dontwarn com.gemalto.jp2.**
+
 # --- Coroutines / Kotlin ----------------------------------------------------
 -dontwarn kotlinx.coroutines.**
 -keepclassmembers class kotlinx.coroutines.** { volatile <fields>; }
