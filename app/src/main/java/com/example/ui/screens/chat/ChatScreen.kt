@@ -6,7 +6,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -63,12 +62,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
 import com.example.ui.screens.chat.components.AgentTraceView
 import com.example.ui.screens.chat.components.AttachmentTray
 import com.example.ui.screens.chat.components.ChatInputBar
@@ -90,6 +87,8 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.localization.SalviaLogo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -101,6 +100,7 @@ fun ChatScreen(
     onNavigateToSettings: () -> Unit
 ) {
     val context = LocalContext.current
+    val strings = LocalAppStrings.current
     val scope = rememberCoroutineScope()
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val listState = rememberLazyListState()
@@ -161,7 +161,7 @@ fun ChatScreen(
         }
     }
 
-    val currentTitle = conversations.find { it.id == currentConversationId }?.title ?: "SALi-HCNSEC"
+    val currentTitle = conversations.find { it.id == currentConversationId }?.title ?: strings.appName
     val activeWorkspace = workspaces.find { it.id == activeWorkspaceId }
 
     ModalNavigationDrawer(
@@ -209,7 +209,7 @@ fun ChatScreen(
                                 maxLines = 1
                             )
                             Text(
-                                text = "Salar Salvia • AI workspace",
+                                text = strings.aiWorkspace,
                                 color = IceCyanLight.copy(alpha = 0.72f),
                                 fontSize = 10.sp,
                                 maxLines = 1
@@ -282,7 +282,7 @@ fun ChatScreen(
                                 modifier = Modifier.background(DarkSurface)
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Export as Markdown", color = TextPrimary, fontSize = 13.sp) },
+                                    text = { Text(strings.exportMarkdown, color = TextPrimary, fontSize = 13.sp) },
                                     leadingIcon = {
                                         Icon(Icons.Default.Share, contentDescription = null, tint = VioletLight, modifier = Modifier.size(16.dp))
                                     },
@@ -297,7 +297,7 @@ fun ChatScreen(
                                 )
 
                                 DropdownMenuItem(
-                                    text = { Text("Regenerate Response", color = TextPrimary, fontSize = 13.sp) },
+                                    text = { Text(strings.regenerate, color = TextPrimary, fontSize = 13.sp) },
                                     leadingIcon = {
                                         Icon(Icons.Default.Refresh, contentDescription = null, tint = VioletLight, modifier = Modifier.size(16.dp))
                                     },
@@ -463,6 +463,7 @@ private fun EmptyChatState(
     onSelectPrompt: (String) -> Unit,
     onUploadZip: () -> Unit
 ) {
+    val strings = LocalAppStrings.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -478,17 +479,13 @@ private fun EmptyChatState(
                 .border(2.dp, Brush.linearGradient(listOf(IceCyan, VioletPrimary, IceFrostBorder)), CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Image(
-                painter = painterResource(id = R.drawable.sali_logo_icon),
-                contentDescription = "SALi-HCNSEC",
-                modifier = Modifier.size(58.dp)
-            )
+            SalviaLogo(size = 58.dp, contentDescription = strings.appName)
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "SALi-HCNSEC",
+            text = strings.emptyTitle,
             color = TextPrimary,
             fontSize = 22.sp,
             fontWeight = FontWeight.Bold,
@@ -498,7 +495,7 @@ private fun EmptyChatState(
         Spacer(modifier = Modifier.height(4.dp))
 
         Text(
-            text = "Production-grade AI agent powered exclusively by HCNSEC",
+            text = strings.emptySubtitle,
             color = IceCyanLight.copy(alpha = 0.8f),
             fontSize = 13.sp,
             textAlign = TextAlign.Center
@@ -512,29 +509,29 @@ private fun EmptyChatState(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             PromptCard(
-                title = "Upload & Analyze Project ZIP",
-                subtitle = "Extract, build tree, and inspect architecture",
+                title = strings.analyzeZipTitle,
+                subtitle = strings.analyzeZipSubtitle,
                 onClick = onUploadZip,
                 accentColor = Color(0xFFF59E0B)
             )
 
             PromptCard(
-                title = "Compare Project Versions",
-                subtitle = "Upload multiple ZIPs and find the strongest golden merge",
+                title = strings.compareVersionsTitle,
+                subtitle = strings.compareVersionsSubtitle,
                 onClick = { onSelectPrompt("Compare all uploaded project versions. Rank them by architecture, reliability, security, performance, maintainability, and completeness. Identify compatible features and give me a file-level golden merge plan with tests and migration risks.") },
                 accentColor = VioletPrimary
             )
 
             PromptCard(
-                title = "Deep Code Refactoring",
-                subtitle = "Generate idiomatic Kotlin coroutines & architecture",
+                title = strings.refactorTitle,
+                subtitle = strings.refactorSubtitle,
                 onClick = { onSelectPrompt("Review my Kotlin code structure and suggest idiomatic architectural refactorings.") },
                 accentColor = IceCyan
             )
 
             PromptCard(
-                title = "Deep Logical & Math Reasoning",
-                subtitle = "Solve complex logic step-by-step with HCNSEC models",
+                title = strings.reasoningTitle,
+                subtitle = strings.reasoningSubtitle,
                 onClick = { onSelectPrompt("Provide a step-by-step proof and deep logical derivation for: ") },
                 accentColor = Color(0xFF10B981)
             )

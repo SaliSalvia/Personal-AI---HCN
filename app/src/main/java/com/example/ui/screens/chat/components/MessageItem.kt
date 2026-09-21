@@ -82,6 +82,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import com.example.ui.localization.LocalAppStrings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -95,6 +96,7 @@ fun MessageItem(
 ) {
     val isUser = message.role == "user"
     val context = LocalContext.current
+    val strings = LocalAppStrings.current
     var isCopied by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val timeLabel = remember(message.timestamp) {
@@ -174,6 +176,7 @@ fun MessageItem(
                     if (!message.reasoningContent.isNullOrBlank()) {
                         ClaudeStyleThinkingBlock(
                             reasoningText = message.reasoningContent,
+                            strings = strings,
                             isCurrentlyThinking = isCurrentlyThinking,
                             isExpanded = isReasoningExpanded,
                             onToggleExpand = {
@@ -254,6 +257,7 @@ fun MessageItem(
 @Composable
 private fun ClaudeStyleThinkingBlock(
     reasoningText: String,
+    strings: com.example.ui.localization.AppStrings,
     isCurrentlyThinking: Boolean,
     isExpanded: Boolean,
     onToggleExpand: () -> Unit
@@ -310,7 +314,7 @@ private fun ClaudeStyleThinkingBlock(
                     Spacer(modifier = Modifier.width(7.dp))
 
                     Text(
-                        text = if (isCurrentlyThinking) "Thinking..." else "Thought process",
+                        text = if (isCurrentlyThinking) strings.liveExecution else strings.thoughtProcess,
                         color = if (isCurrentlyThinking) IceCyan else IceCyanLight,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
@@ -423,7 +427,7 @@ private fun ClaudeStyleThinkingBlock(
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = if (isThoughtCopied) "Copied" else "Copy thought process",
+                                    text = if (isThoughtCopied) strings.copied else strings.copyThoughtProcess,
                                     color = if (isThoughtCopied) SuccessGreen else TextSecondary,
                                     fontSize = 10.sp
                                 )

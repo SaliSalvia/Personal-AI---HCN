@@ -66,6 +66,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
 import com.example.data.api.AiProvider
+import com.example.data.settings.AppLanguage
+import com.example.data.settings.LanguageRepository
+import com.example.ui.localization.LocalAppStrings
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -81,6 +84,7 @@ import com.example.ui.theme.VioletPrimary
 @Composable
 fun SettingsScreen(
     viewModel: SettingsViewModel,
+    languageRepository: LanguageRepository,
     onNavigateBack: () -> Unit,
     onLoggedOut: () -> Unit
 ) {
@@ -89,6 +93,8 @@ fun SettingsScreen(
     val testState by viewModel.testState.collectAsState()
     val accountUsage by viewModel.accountUsage.collectAsState()
     val availableModels by viewModel.availableModels.collectAsState()
+    val language by languageRepository.language.collectAsState()
+    val strings = LocalAppStrings.current
 
     var showChangeKeyDialog by remember { mutableStateOf(false) }
     var showRemoveKeyDialog by remember { mutableStateOf(false) }
@@ -106,7 +112,7 @@ fun SettingsScreen(
             TopAppBar(
                 title = {
                     Text(
-                        text = "Settings & Credentials",
+                        text = strings.settingsApiKeys,
                         color = TextPrimary,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.SemiBold
@@ -134,6 +140,34 @@ fun SettingsScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Language is intentionally first: switching it immediately updates every screen.
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp)),
+                shape = RoundedCornerShape(14.dp),
+                color = DarkSurface
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(strings.languageLabel, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(AppLanguage.ENGLISH to strings.english, AppLanguage.PERSIAN to strings.persian).forEach { (option, label) ->
+                            Button(
+                                onClick = { languageRepository.setLanguage(option) },
+                                modifier = Modifier.weight(1f).height(38.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (language == option) VioletPrimary else DarkSurfaceVariant
+                                ),
+                                shape = RoundedCornerShape(9.dp)
+                            ) { Text(label, color = TextPrimary, fontSize = 12.sp) }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
 
             // SECTION 1: HCNSEC API KEY CREDENTIALS
             Text(
@@ -314,7 +348,7 @@ fun SettingsScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        "Paste a provider key below. SALi detects Google AI Studio (AIza…), Groq (gsk_…) and OpenRouter (sk-or-…) automatically, validates it, and stores it encrypted.",
+                        "Paste a provider key below. Salvia detects Google AI Studio (AIza…), Groq (gsk_…) and OpenRouter (sk-or-…) automatically, validates it, and stores it encrypted.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -476,11 +510,11 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Lock, contentDescription = null, tint = VioletPrimary, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Exclusively HCNSEC & Hardware-Backed Keystore", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("HCNSEC-First & Hardware-Backed Keystore", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "• Zero external AI providers (no OpenAI, Gemini, Anthropic, or third parties).\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Base URL is permanently bound to https://api.hcnsec.cn/v1.",
+                        text = "• HCNSEC is the default provider; Google AI Studio, Groq and OpenRouter are optional and only used when you add a key for them.\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Requests are sent only to the provider you have activated.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -626,7 +660,7 @@ fun SettingsScreen(
             title = { Text("Remove API Key?", color = TextPrimary) },
             text = {
                 Text(
-                    "This will delete the encrypted key from Android Keystore. You will need to enter an API key again to use SALi-HCNSEC.",
+                    "This will delete the encrypted key from Android Keystore. You will need to enter an API key again to use Salvia-H.Ai.",
                     color = TextSecondary,
                     fontSize = 13.sp
                 )

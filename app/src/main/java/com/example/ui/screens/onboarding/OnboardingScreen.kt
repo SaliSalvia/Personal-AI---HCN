@@ -81,6 +81,8 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.localization.SalviaLogo
 
 @Composable
 fun OnboardingScreen(
@@ -89,6 +91,7 @@ fun OnboardingScreen(
 ) {
     val apiKey by viewModel.apiKeyInput.collectAsState()
     val validationState by viewModel.validationState.collectAsState()
+    val strings = LocalAppStrings.current
     var passwordVisible by remember { mutableStateOf(false) }
     val keyboardController = LocalSoftwareKeyboardController.current
 
@@ -131,19 +134,13 @@ fun OnboardingScreen(
                     .border(2.dp, Brush.linearGradient(listOf(IceCyan, VioletPrimary, IceFrostBorder)), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Image(
-                    painter = painterResource(id = R.drawable.app_launcher_frozen_mascot),
-                    contentDescription = "SALi-HCNSEC Logo",
-                    modifier = Modifier
-                        .size(80.dp)
-                        .clip(CircleShape)
-                )
+                SalviaLogo(size = 80.dp, contentDescription = strings.appName)
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "SALi-HCNSEC",
+                text = strings.appName,
                 color = TextPrimary,
                 fontSize = 28.sp,
                 fontWeight = FontWeight.Bold,
@@ -153,7 +150,7 @@ fun OnboardingScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Secure Autonomous AI Agent • Full-Power HCNSEC Access",
+                text = strings.secureAgent,
                 color = TextSecondary,
                 fontSize = 14.sp,
                 textAlign = TextAlign.Center
@@ -188,7 +185,7 @@ fun OnboardingScreen(
                     horizontalAlignment = Alignment.Start
                 ) {
                     Text(
-                        text = "Enter HCNSEC API Key",
+                        text = strings.enterApiKey,
                         color = TextPrimary,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.SemiBold
@@ -197,7 +194,7 @@ fun OnboardingScreen(
                     Spacer(modifier = Modifier.height(4.dp))
 
                     Text(
-                        text = "One-time setup • Stored permanently & encrypted on device",
+                        text = strings.oneTimeSetup,
                         color = IceCyanLight,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Medium
@@ -213,7 +210,7 @@ fun OnboardingScreen(
                             .testTag("api_key_input"),
                         placeholder = {
                             Text(
-                                text = "sk-...",
+                                text = "sk-…",
                                 color = Color(0xFF64748B),
                                 fontSize = 14.sp
                             )
@@ -356,9 +353,9 @@ fun OnboardingScreen(
                                 strokeWidth = 2.dp
                             )
                             Spacer(modifier = Modifier.width(10.dp))
-                            Text(text = "Validating with HCNSEC...", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text(text = strings.validating, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         } else {
-                            Text(text = "Connect to HCNSEC", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Text(text = strings.connectToHcnsec, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
                 }
@@ -376,7 +373,7 @@ fun OnboardingScreen(
             ) {
                 Column(modifier = Modifier.padding(14.dp)) {
                     Text(
-                        text = "UNLOCKED HCNSEC SUITE",
+                        text = strings.unlockedSuite.uppercase(),
                         color = IceCyan,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -387,9 +384,9 @@ fun OnboardingScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        CapabilityItem(label = "DeepSeek-R1 / V3", desc = "Reasoning & Coding")
-                        CapabilityItem(label = "Claude 3.5 / 3.7", desc = "Artifacts & Agents")
-                        CapabilityItem(label = "GPT-4o & Qwen", desc = "Vision & Real-time")
+                        CapabilityItem(label = "DeepSeek-R1 / V3", desc = strings.reasoningCoding)
+                        CapabilityItem(label = "Claude 3.5 / 3.7", desc = strings.artifactsAgents)
+                        CapabilityItem(label = "GPT-4o & Qwen", desc = strings.visionRealtime)
                     }
                 }
             }
@@ -415,7 +412,7 @@ fun OnboardingScreen(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "Encrypted at rest with Android Keystore. Keys are never logged and are sent only to api.hcnsec.cn.",
+                    text = strings.keystoreSecurity,
                     color = TextSecondary,
                     fontSize = 11.sp,
                     lineHeight = 15.sp

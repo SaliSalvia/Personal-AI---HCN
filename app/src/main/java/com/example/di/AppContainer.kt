@@ -8,6 +8,7 @@ import com.example.data.repository.ModelRepository
 import com.example.data.repository.WorkspaceRepository
 import com.example.data.repository.SourceDocumentRepository
 import com.example.data.security.ApiKeyRepository
+import com.example.data.settings.LanguageRepository
 import com.example.data.workspace.ZipWorkspaceManager
 import com.example.domain.router.AutoModelRouter
 
@@ -16,6 +17,10 @@ class AppContainer(context: Context) {
 
     val apiKeyRepository by lazy {
         ApiKeyRepository(appContext)
+    }
+
+    val languageRepository by lazy {
+        LanguageRepository(appContext)
     }
 
     val apiClient by lazy {

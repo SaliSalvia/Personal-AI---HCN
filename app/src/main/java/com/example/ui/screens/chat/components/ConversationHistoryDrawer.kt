@@ -78,6 +78,8 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import com.example.ui.localization.LocalAppStrings
+import com.example.ui.localization.SalviaBrandLockup
 
 @Composable
 fun ConversationHistoryDrawer(
@@ -94,6 +96,7 @@ fun ConversationHistoryDrawer(
     onCloseDrawer: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalAppStrings.current
     var searchQuery by remember { mutableStateOf("") }
     var renameTargetId by remember { mutableStateOf<String?>(null) }
     var renameTitleInput by remember { mutableStateOf("") }
@@ -122,26 +125,7 @@ fun ConversationHistoryDrawer(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    androidx.compose.foundation.Image(
-                        painter = androidx.compose.ui.res.painterResource(id = com.example.R.drawable.app_launcher_frozen_mascot),
-                        contentDescription = "App Icon Mascot",
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .border(1.dp, IceCyan.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        text = "SALi-HCNSEC",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.5.sp
-                    )
-                }
+                SalviaBrandLockup(strings = strings, showByline = false)
 
                 val newChatBrush = Brush.linearGradient(
                     listOf(VioletPrimary, Color(0xFF6366F1), IceCyan)
@@ -166,7 +150,7 @@ fun ConversationHistoryDrawer(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(text = "New", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(text = strings.newChat, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -177,7 +161,7 @@ fun ConversationHistoryDrawer(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 placeholder = {
-                    Text(text = "Search conversations & keywords...", color = Color(0xFF64748B), fontSize = 12.sp)
+                    Text(text = strings.searchConversations, color = Color(0xFF64748B), fontSize = 12.sp)
                 },
                 leadingIcon = {
                     Icon(
@@ -254,7 +238,7 @@ fun ConversationHistoryDrawer(
                 if (workspaces.isNotEmpty()) {
                     item {
                         Text(
-                            text = "PROJECT WORKSPACES",
+                            text = strings.workspaces,
                             color = Color(0xFFFBBF24),
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -280,7 +264,7 @@ fun ConversationHistoryDrawer(
                 if (pinned.isNotEmpty()) {
                     item {
                         Text(
-                            text = "PINNED",
+                            text = strings.pinned,
                             color = VioletLight,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
@@ -313,7 +297,7 @@ fun ConversationHistoryDrawer(
                 // RECENT CONVERSATIONS
                 item {
                     Text(
-                        text = if (searchQuery.isNotBlank()) "MATCHING CONVERSATIONS" else "RECENT CONVERSATIONS",
+                        text = if (searchQuery.isNotBlank()) strings.matchingConversations else strings.recentConversations,
                         color = if (searchQuery.isNotBlank()) IceCyanLight else TextSecondary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
@@ -392,7 +376,7 @@ fun ConversationHistoryDrawer(
                     )
                     Spacer(modifier = Modifier.width(10.dp))
                     Text(
-                        text = "Settings & API Keys",
+                        text = strings.settingsApiKeys,
                         color = TextPrimary,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium

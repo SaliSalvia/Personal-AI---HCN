@@ -58,6 +58,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import com.example.ui.localization.LocalAppStrings
 
 @Composable
 fun AgentTraceView(
@@ -67,6 +68,7 @@ fun AgentTraceView(
 ) {
     if (steps.isEmpty()) return
 
+    val strings = LocalAppStrings.current
     var isExpanded by remember { mutableStateOf(true) }
     val activeStep = steps.lastOrNull { it.status == TraceStepStatus.RUNNING }
         ?: steps.lastOrNull { it.status == TraceStepStatus.COMPLETED }
@@ -133,7 +135,7 @@ fun AgentTraceView(
 
                     Column {
                         Text(
-                            text = if (isGenerating) "Agent Live Execution Stages" else "Agent Execution Report",
+                            text = if (isGenerating) strings.liveExecution else strings.executionReport,
                             color = TextPrimary,
                             fontSize = 12.5.sp,
                             fontWeight = FontWeight.SemiBold
@@ -159,7 +161,7 @@ fun AgentTraceView(
                     ) {
                         val completedCount = steps.count { it.status == TraceStepStatus.COMPLETED }
                         Text(
-                            text = "$completedCount/${steps.size} steps",
+                            text = strings.steps(completedCount, steps.size),
                             color = IceCyanLight,
                             fontSize = 10.sp,
                             fontWeight = FontWeight.Medium

@@ -61,6 +61,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VioletLight
 import com.example.ui.theme.VioletPrimary
+import com.example.ui.localization.LocalAppStrings
 
 @Composable
 fun ChatInputBar(
@@ -76,6 +77,7 @@ fun ChatInputBar(
     hasAttachments: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalAppStrings.current
     val inputBarShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
     Column(
         modifier = modifier
@@ -172,7 +174,7 @@ fun ChatInputBar(
                     )
                     Spacer(modifier = Modifier.width(5.dp))
                     Text(
-                        text = "Upload ZIP",
+                        text = strings.uploadZip,
                         color = Color(0xFFFDE68A),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium
@@ -220,7 +222,7 @@ fun ChatInputBar(
             ) {
                 if (inputText.isEmpty()) {
                     Text(
-                        text = "پیام برای Salar Salvia…",
+                        text = strings.messagePlaceholder,
                         color = Color(0xFF70809C),
                         fontSize = 14.sp
                     )

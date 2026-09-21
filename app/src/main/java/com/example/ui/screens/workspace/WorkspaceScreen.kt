@@ -68,6 +68,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.WorkspaceFileInfo
+import com.example.ui.localization.LocalAppStrings
 import com.example.ui.screens.chat.components.CodeBlockView
 import com.example.ui.screens.chat.components.formatFileSize
 import com.example.ui.theme.DarkBg
@@ -99,6 +100,7 @@ fun WorkspaceScreen(
     val selectedFilePath by viewModel.selectedFilePath.collectAsState()
     val selectedFileContent by viewModel.selectedFileContent.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val strings = LocalAppStrings.current
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var showDeleteConfirmDialog by remember { mutableStateOf(false) }
@@ -111,7 +113,7 @@ fun WorkspaceScreen(
                 title = {
                     Column {
                         Text(
-                            text = workspace?.name ?: "Workspace",
+                            text = workspace?.name ?: strings.workspace,
                             color = TextPrimary,
                             fontSize = 16.sp,
                             fontWeight = FontWeight.SemiBold,
@@ -185,12 +187,12 @@ fun WorkspaceScreen(
                 Tab(
                     selected = selectedTabIndex == 0,
                     onClick = { selectedTabIndex = 0 },
-                    text = { Text("Files & Tree", fontSize = 14.sp) }
+                    text = { Text(strings.filesTree, fontSize = 14.sp) }
                 )
                 Tab(
                     selected = selectedTabIndex == 1,
                     onClick = { selectedTabIndex = 1 },
-                    text = { Text("Project Analysis", fontSize = 14.sp) }
+                    text = { Text(strings.projectAnalysis, fontSize = 14.sp) }
                 )
             }
 
@@ -287,7 +289,7 @@ fun WorkspaceScreen(
                         modifier = Modifier.size(16.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Ask SALi about this file", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(strings.askAboutFile, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))
@@ -335,6 +337,7 @@ private fun FilesTabView(
     onSearchChanged: (String) -> Unit,
     onSelectFile: (String) -> Unit
 ) {
+    val strings = LocalAppStrings.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -343,7 +346,7 @@ private fun FilesTabView(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = onSearchChanged,
-            placeholder = { Text("Search files in project...", color = Color(0xFF64748B), fontSize = 13.sp) },
+            placeholder = { Text(strings.searchFiles, color = Color(0xFF64748B), fontSize = 13.sp) },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Default.Search,
@@ -481,6 +484,7 @@ private fun AnalysisTabView(
 ) {
     if (workspace == null) return
 
+    val strings = LocalAppStrings.current
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -511,7 +515,7 @@ private fun AnalysisTabView(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Project Architecture",
+                    text = strings.projectArchitecture,
                     color = TextPrimary,
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold
@@ -531,7 +535,7 @@ private fun AnalysisTabView(
                 if (!workspace.summary.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(14.dp))
                     Text(
-                        text = "Structure Overview",
+                        text = strings.structureOverview,
                         color = TextSecondary,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
@@ -565,7 +569,7 @@ private fun AnalysisTabView(
                 modifier = Modifier.size(16.dp)
             )
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Chat with this Workspace Agent", fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(strings.chatWithWorkspace, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
