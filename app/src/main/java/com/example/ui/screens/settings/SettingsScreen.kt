@@ -104,6 +104,8 @@ fun SettingsScreen(
     val activeProvider by viewModel.activeProvider.collectAsState()
     var providerDialog by remember { mutableStateOf<AiProvider?>(null) }
     var providerKeyInput by remember { mutableStateOf("") }
+    var customBaseUrlInput by remember { mutableStateOf("") }
+    var customModelInput by remember { mutableStateOf("") }
     var providerError by remember { mutableStateOf<String?>(null) }
     var isSavingProvider by remember { mutableStateOf(false) }
 
@@ -358,9 +360,15 @@ fun SettingsScreen(
                         val configured = viewModel.providerKeyStatus(provider) != "No key configured"
                         Button(
                             onClick = {
-                                providerDialog = provider
-                                providerKeyInput = ""
-                                providerError = null
+                                if (configured) {
+                                    viewModel.selectProvider(provider)
+                                } else {
+                                    providerDialog = provider
+                                    providerKeyInput = ""
+                                    customBaseUrlInput = ""
+                                    customModelInput = ""
+                                    providerError = null
+                                }
                             },
                             modifier = Modifier.fillMaxWidth().height(42.dp),
                             colors = ButtonDefaults.buttonColors(
@@ -536,6 +544,38 @@ fun SettingsScreen(
                 Column {
                     Text(requestedProvider.description, color = TextSecondary, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(10.dp))
+                    if (requestedProvider == AiProvider.CUSTOM) {
+                        OutlinedTextField(
+                            value = customBaseUrlInput,
+                            onValueChange = { customBaseUrlInput = it; providerError = null },
+                            placeholder = { Text("https://your-provider.example/v1", color = Color(0xFF64748B)) },
+                            label = { Text("HTTPS base URL") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedBorderColor = VioletPrimary,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = customModelInput,
+                            onValueChange = { customModelInput = it },
+                            placeholder = { Text("model-id (optional)", color = Color(0xFF64748B)) },
+                            label = { Text("Default model") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = TextPrimary,
+                                unfocusedTextColor = TextPrimary,
+                                focusedBorderColor = VioletPrimary,
+                                unfocusedBorderColor = DarkBorder
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
                     OutlinedTextField(
                         value = providerKeyInput,
                         onValueChange = { providerKeyInput = it; providerError = null },
@@ -558,12 +598,16 @@ fun SettingsScreen(
             },
             confirmButton = {
                 Button(
-                    enabled = providerKeyInput.isNotBlank() && !isSavingProvider,
+                    enabled = providerKeyInput.isNotBlank() &&
+                        (requestedProvider != AiProvider.CUSTOM || customBaseUrlInput.isNotBlank()) &&
+                        !isSavingProvider,
                     onClick = {
                         isSavingProvider = true
                         viewModel.saveProviderKey(
                             requestedProvider,
                             providerKeyInput,
+                            customBaseUrl = customBaseUrlInput,
+                            customModel = customModelInput,
                             onSuccess = {
                                 isSavingProvider = false
                                 providerDialog = null

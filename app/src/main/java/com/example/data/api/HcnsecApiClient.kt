@@ -39,10 +39,12 @@ class HcnsecApiClient(
     private fun activeProvider(): AiProvider = apiKeyRepository.getActiveProvider()
 
     private fun baseUrl(provider: AiProvider): String = when (provider) {
+        AiProvider.HCNSEC -> BASE_URL
+        AiProvider.GOOGLE_AI_STUDIO -> GEMINI_BASE_URL
         AiProvider.GROQ -> GROQ_BASE_URL
         AiProvider.OPEN_ROUTER -> OPEN_ROUTER_BASE_URL
-        AiProvider.GOOGLE_AI_STUDIO -> GEMINI_BASE_URL
-        AiProvider.HCNSEC -> BASE_URL
+        else -> apiKeyRepository.getProviderBaseUrl(provider)
+            ?: error("${provider.displayName} endpoint is not configured")
     }
 
     // Every DTO is annotated with @JsonClass(generateAdapter = true), so the KSP
@@ -54,11 +56,16 @@ class HcnsecApiClient(
         val provider = activeProvider()
         val apiKey = apiKeyRepository.getProviderKey(provider) ?: ""
         val originalRequest = chain.request()
-        val authenticatedRequest = originalRequest.newBuilder()
-            .header("Authorization", "Bearer $apiKey")
+        val builder = originalRequest.newBuilder()
             .header("Accept", "application/json")
             .header("User-Agent", "Sali-HCNSEC-Android/1.0")
-            .build()
+        if (provider != AiProvider.GOOGLE_AI_STUDIO) {
+            builder.header("Authorization", "Bearer $apiKey")
+        }
+        if (provider == AiProvider.OPEN_ROUTER) {
+            builder.header("X-Title", "Salvia H.Ai")
+        }
+        val authenticatedRequest = builder.build()
         chain.proceed(authenticatedRequest)
     }
 
@@ -134,7 +141,7 @@ class HcnsecApiClient(
                 ))
             }
             val request = Request.Builder()
-                .url("${baseUrl(activeProvider())}/models")
+                .url("${baseUrl(provider)}/models")
                 .get()
                 .build()
 
@@ -264,6 +271,9 @@ class HcnsecApiClient(
      * If balance cannot be retrieved through an official API endpoint, clearly communicate that limitation."
      */
     suspend fun getAccountUsage(): Result<UserBalanceDto?> = withContext(Dispatchers.IO) {
+        // This is an HCNSEC-specific endpoint. Never send another provider's key
+        // to it when the user has switched providers.
+        if (activeProvider() != AiProvider.HCNSEC) return@withContext Result.success(null)
         try {
             val request = Request.Builder()
                 .url("$BASE_URL/dashboard/billing/usage")
