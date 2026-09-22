@@ -26,6 +26,8 @@ class ApiKeyRepository(context: Context) {
         private const val KEY_LAST_VALIDATED = "key_last_validated"
         private const val KEY_AUTO_ROUTING = "key_auto_routing_enabled"
         private const val KEY_DEFAULT_MODEL = "key_default_model"
+        private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
+        private const val KEY_CUSTOM_MODEL = "custom_model"
     }
 
     /**
@@ -93,6 +95,29 @@ class ApiKeyRepository(context: Context) {
 
     fun setActiveProvider(provider: AiProvider) {
         prefs.edit().putString(KEY_ACTIVE_PROVIDER, provider.name).apply()
+    }
+
+    fun getProviderBaseUrl(provider: AiProvider): String? {
+        return if (provider == AiProvider.CUSTOM) {
+            prefs.getString(KEY_CUSTOM_BASE_URL, null)
+        } else provider.defaultBaseUrl
+    }
+
+    fun saveCustomProvider(baseUrl: String, model: String?) {
+        val normalized = baseUrl.trim().removeSuffix("/")
+        require(normalized.startsWith("https://")) { "Custom endpoint must use HTTPS." }
+        require(normalized.length <= 240) { "Custom endpoint URL is too long." }
+        prefs.edit()
+            .putString(KEY_CUSTOM_BASE_URL, normalized)
+            .putString(KEY_CUSTOM_MODEL, model?.trim().orEmpty())
+            .apply()
+    }
+
+    fun getCustomModel(): String = prefs.getString(KEY_CUSTOM_MODEL, "") ?: ""
+
+    fun clearCustomProvider() {
+        prefs.edit().remove(KEY_CUSTOM_BASE_URL).remove(KEY_CUSTOM_MODEL).apply()
+        clearProviderKey(AiProvider.CUSTOM)
     }
 
     fun clearApiKey() = clearProviderKey(AiProvider.HCNSEC)

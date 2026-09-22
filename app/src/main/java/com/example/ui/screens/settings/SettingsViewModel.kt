@@ -42,9 +42,24 @@ class SettingsViewModel(
 
     fun providerKeyStatus(provider: AiProvider): String = apiKeyRepository.getMaskedProviderKey(provider)
 
-    fun saveProviderKey(provider: AiProvider, key: String, onSuccess: (AiProvider) -> Unit, onError: (String) -> Unit) {
+    fun saveProviderKey(
+        provider: AiProvider,
+        key: String,
+        customBaseUrl: String? = null,
+        customModel: String? = null,
+        onSuccess: (AiProvider) -> Unit,
+        onError: (String) -> Unit
+    ) {
         viewModelScope.launch {
             val detectedProvider = AiProvider.detectFromKey(key) ?: provider
+            try {
+                if (detectedProvider == AiProvider.CUSTOM) {
+                    apiKeyRepository.saveCustomProvider(customBaseUrl.orEmpty(), customModel)
+                }
+            } catch (e: IllegalArgumentException) {
+                onError(e.message ?: "Invalid custom provider settings")
+                return@launch
+            }
             apiKeyRepository.setActiveProvider(detectedProvider)
             _activeProvider.value = detectedProvider
             val result = apiClient.validateApiKey(key)
