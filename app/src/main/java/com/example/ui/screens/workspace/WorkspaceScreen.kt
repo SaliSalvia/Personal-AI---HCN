@@ -548,6 +548,20 @@ private fun AnalysisTabView(
                         lineHeight = 18.sp
                     )
                 }
+
+                if (!workspace.archivePath.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Original ZIP retained locally • SHA-256: ${workspace.archiveSha256?.take(12).orEmpty()}…",
+                        color = IceCyanLight.copy(alpha = 0.82f),
+                        fontSize = 11.sp
+                    )
+                    Text(
+                        text = "Deep analysis reuses this archive's indexed content when requested.",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
             }
         }
 

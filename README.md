@@ -9,7 +9,7 @@ Personal AI workspace with **HCNSEC as the primary provider**, plus a broad cata
 - **Custom provider endpoints:** Add any HTTPS OpenAI-compatible base URL and optional model from Settings. This supports self-hosted gateways and new providers without an app update.
 - **Provider-aware model discovery:** Models are loaded from the active provider's `/models` endpoint where supported, with manual model IDs available for providers that do not expose a catalog.
 - **Reasoning Process Display:** Collapsible visual accordion for DeepSeek-R1 / HCNSEC reasoning tokens (`reasoning_content`).
-- **ZIP Workspace & Codebase Analysis:** Upload ZIP files directly to extract code trees and conduct holistic architectural discussions.
+- **Durable ZIP Workspace & Deep Analysis:** Every accepted ZIP is copied into app-private storage, indexed as an independent project version, protected with Zip Slip/size limits, and fingerprinted with SHA-256. HCNSEC receives a bounded, labelled deep-analysis context containing the project tree, summaries, code, Markdown, PDF and DOCX extracts when you explicitly ask for analysis; the original archive remains reusable offline until deleted.
 - **Hardware-Backed KeyStore Security:** User API keys for every provider are securely encrypted on-device with AES-GCM and Android Keystore. API keys are never bundled in the APK or sent to a different provider than the one selected.
 - **Bilingual UI (EN / فارسی):** A dependency-free localization layer switches the whole interface, with automatic RTL layout, from Settings.
 - **Zero-Bug Material 3 Design:** Edge-to-edge support, custom dark theme (`#0B0C10`, `#14151F`, `#8B5CF6`), and smooth auto-scrolling.
@@ -71,6 +71,6 @@ The release build is tuned for smooth playback of streamed answers on mid/low-en
 
 The catalog provides connection profiles, not free credits. Each provider controls its own free quota, eligibility, region, model availability, rate limits, and billing terms; verify those terms on the provider's official dashboard before use. HCNSEC remains the default route and no provider key is required unless you choose to activate that provider.
 
-All provider keys are entered by the user in the app and stored locally. The app does not proxy requests through a third-party server. For custom endpoints, use HTTPS and include the API's version path (usually `/v1`).
+All provider keys are entered by the user in the app and stored locally. The app does not proxy requests through a third-party server. For custom endpoints, use HTTPS and include the API's version path (usually `/v1`). Uploaded ZIPs are retained only in the app's private storage and are not silently uploaded or permanently stored by an AI provider; each requested analysis sends only the bounded extracted context to the currently selected provider.
 
 # Build outputs are published as a GitHub Release asset plus a git blob.

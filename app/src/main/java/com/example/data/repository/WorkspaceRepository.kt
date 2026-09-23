@@ -34,7 +34,9 @@ class WorkspaceRepository(
             projectType = summary.projectType,
             fileCount = summary.totalFiles,
             totalSizeBytes = summary.totalSizeBytes,
-            summary = summary.structureOverview
+            summary = summary.structureOverview,
+            archivePath = summary.archivePath,
+            archiveSha256 = summary.archiveSha256
         )
         workspaceDao.insert(entity)
         Result.success(summary)

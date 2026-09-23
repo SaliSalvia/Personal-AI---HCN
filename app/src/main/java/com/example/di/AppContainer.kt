@@ -1,7 +1,10 @@
 package com.example.di
 
 import android.content.Context
+import com.example.data.api.AiProvider
+import com.example.data.api.DefaultAiProviderRegistry
 import com.example.data.api.HcnsecApiClient
+import com.example.data.api.HcnsecProviderClient
 import com.example.data.local.AppDatabase
 import com.example.data.repository.ChatRepository
 import com.example.data.repository.ModelRepository
@@ -27,6 +30,15 @@ class AppContainer(context: Context) {
         HcnsecApiClient(apiKeyRepository)
     }
 
+    /** Provider-neutral runtime registry. Add a new client here or from a feature module. */
+    val providerRegistry by lazy {
+        DefaultAiProviderRegistry().also { registry ->
+            AiProvider.catalog.forEach { provider ->
+                registry.register(HcnsecProviderClient(apiClient, provider))
+            }
+        }
+    }
+
     val database by lazy {
         AppDatabase.getInstance(appContext)
     }
@@ -41,7 +53,7 @@ class AppContainer(context: Context) {
 
     val modelRepository by lazy {
         ModelRepository(
-            apiClient = apiClient,
+            providerRegistry = providerRegistry,
             customModelDao = database.customModelDao(),
             apiKeyRepository = apiKeyRepository
         )
@@ -51,7 +63,8 @@ class AppContainer(context: Context) {
         ChatRepository(
             conversationDao = database.conversationDao(),
             messageDao = database.messageDao(),
-            apiClient = apiClient,
+            providerRegistry = providerRegistry,
+            apiKeyRepository = apiKeyRepository,
             modelRouter = modelRouter,
             zipWorkspaceManager = zipWorkspaceManager
         )

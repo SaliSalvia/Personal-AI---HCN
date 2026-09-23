@@ -25,7 +25,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         CustomModelEntity::class,
         SourceDocumentEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -46,7 +46,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "sali_hcnsec.db"
                 )
-                    .addMigrations(MIGRATION_2_3)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                 INSTANCE = instance
                 instance
@@ -69,6 +69,13 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_source_documents_createdAt ON source_documents(createdAt)")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE workspaces ADD COLUMN archivePath TEXT")
+                db.execSQL("ALTER TABLE workspaces ADD COLUMN archiveSha256 TEXT")
             }
         }
     }

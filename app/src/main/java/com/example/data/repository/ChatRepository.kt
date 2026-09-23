@@ -1,8 +1,8 @@
 package com.example.data.repository
 
-import com.example.data.api.ChatMessageDto
-import com.example.data.api.HcnsecApiClient
-import com.example.data.api.StreamEvent
+import com.example.domain.provider.AiProviderRegistry
+import com.example.domain.provider.ProviderMessage
+import com.example.domain.provider.ProviderStreamEvent
 import com.example.data.local.dao.ConversationDao
 import com.example.data.local.dao.MessageDao
 import com.example.data.local.entity.ConversationEntity
@@ -14,6 +14,7 @@ import com.example.domain.model.ChatMessage
 import com.example.domain.model.TraceStep
 import com.example.domain.model.TraceStepStatus
 import com.example.domain.router.AutoModelRouter
+import com.example.data.security.ApiKeyRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,7 +30,8 @@ import java.util.UUID
 class ChatRepository(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
-    private val apiClient: HcnsecApiClient,
+    private val providerRegistry: AiProviderRegistry,
+    private val apiKeyRepository: ApiKeyRepository,
     private val modelRouter: AutoModelRouter,
     private val zipWorkspaceManager: ZipWorkspaceManager
 ) {
@@ -104,7 +106,7 @@ class ChatRepository(
     }
 
     /**
-     * Sends a user message and streams assistant response from HCNSEC API.
+     * Sends a user message and streams an assistant response from the active provider.
      */
     suspend fun sendMessage(
         conversationId: String,
@@ -165,14 +167,14 @@ class ChatRepository(
         if (comparisonWorkspaceIds.isNotEmpty()) {
             additionalContext.append("\n\n--- MULTI-VERSION PROJECT CONTEXT ---\n")
             additionalContext.append("You are comparing ${comparisonWorkspaceIds.size} imported project version(s). Treat each version as a separate candidate. Identify strengths, regressions, compatibility, security risks, and mergeable features. Do not invent files that are not present.\n")
-            comparisonWorkspaceIds.forEachIndexed { index, id ->
-                val relevantChunks = zipWorkspaceManager.getRelevantWorkspaceChunks(id, userPrompt, maxTotalChunks = 4)
-                additionalContext.append("\n### PROJECT VERSION ${index + 1} ($id)\n")
-                relevantChunks.forEach { chunk ->
-                    additionalContext.append("File: ${chunk.filePath} [part ${chunk.chunkIndex}/${chunk.totalChunks}]:\n")
-                    additionalContext.append("```\n${chunk.content}\n```\n\n")
-                }
-            }
+            additionalContext.append(
+                zipWorkspaceManager.buildDeepAnalysisContext(
+                    workspaceIds = comparisonWorkspaceIds,
+                    userQuery = userPrompt,
+                    maxChunksPerWorkspace = 18,
+                    maxTotalChars = 100_000
+                )
+            )
         }
 
         // Attached text/document files
@@ -206,17 +208,17 @@ class ChatRepository(
             updateTraceStep(steps, "step_route", TraceStepStatus.COMPLETED, "Using: $resolvedModelId")
         }
 
-        // Step 4: Stream response from HCNSEC API
-        steps.add(TraceStep("step_stream", "Generate response", "Streaming tokens via HCNSEC API", TraceStepStatus.RUNNING))
+        // Step 4: Stream response through the active provider adapter
+        steps.add(TraceStep("step_stream", "Generate response", "Streaming tokens via active AI provider", TraceStepStatus.RUNNING))
         _currentTrace.value = steps.toList()
 
         // Fetch conversation history
         val history = messageDao.getMessagesSnapshot(conversationId).takeLast(12)
-        val apiMessages = mutableListOf<ChatMessageDto>()
+        val apiMessages = mutableListOf<ProviderMessage>()
 
         // System prompt
         apiMessages.add(
-            ChatMessageDto(
+            ProviderMessage(
                 role = "system",
                 content = "You are SALi-HCNSEC, a production-quality personal AI Agent powered exclusively by HCNSEC. Provide accurate, clean, structured responses with clear markdown and syntax-highlighted code blocks."
             )
@@ -230,9 +232,9 @@ class ChatRepository(
 
         for (msg in history) {
             if (msg.id == contextTargetId && additionalContext.isNotEmpty()) {
-                apiMessages.add(ChatMessageDto(role = msg.role, content = msg.content + additionalContext.toString()))
+                apiMessages.add(ProviderMessage(role = msg.role, content = msg.content + additionalContext.toString()))
             } else {
-                apiMessages.add(ChatMessageDto(role = msg.role, content = msg.content))
+                apiMessages.add(ProviderMessage(role = msg.role, content = msg.content))
             }
         }
 
@@ -274,12 +276,18 @@ class ChatRepository(
         }
 
         try {
-            apiClient.streamChatCompletion(
-                model = resolvedModelId,
+            val providerClient = providerRegistry.get(apiKeyProviderId())
+                ?: throw IllegalStateException("Active AI provider is not registered")
+            if (!providerClient.descriptor.supportsStreaming) {
+                onErrorCallback("${providerClient.descriptor.displayName} does not support streaming")
+                return@withContext
+            }
+            providerClient.streamChat(
+                modelId = resolvedModelId,
                 messages = apiMessages
             ).collect { event ->
                 when (event) {
-                    is StreamEvent.Content -> {
+                    is ProviderStreamEvent.Content -> {
                         var text = event.text
                         if (!isInsideThinkTag && text.contains("<think>")) {
                             val thinkIndex = text.indexOf("<think>")
@@ -323,21 +331,21 @@ class ChatRepository(
                         }
                         periodicAutoSave()
                     }
-                    is StreamEvent.Reasoning -> {
+                    is ProviderStreamEvent.Reasoning -> {
                         // updateTraceStep() is a no-op while status and detail are
                         // unchanged, so this no longer republishes the whole trace
                         // (and recomposes the screen) on every reasoning token.
                         updateTraceStep(steps, "step_stream", TraceStepStatus.RUNNING, "Deep reasoning & analysis (DeepSeek-R1)...")
-                        reasoningBuilder.append(event.reasoningText)
+                        reasoningBuilder.append(event.text)
                         onChunkReceived("", event.reasoningText)
                         periodicAutoSave()
                     }
-                    is StreamEvent.Completed -> {
+                    is ProviderStreamEvent.Completed -> {
                         updateTraceStep(steps, "step_stream", TraceStepStatus.COMPLETED, "Completed successfully")
                     }
-                    is StreamEvent.Error -> {
+                    is ProviderStreamEvent.Error -> {
                         updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, event.message)
-                        onError(event.message)
+                        onErrorCallback(event.message)
                     }
                 }
             }
@@ -386,14 +394,22 @@ class ChatRepository(
                     )
                 }
             }
-            throw e
-        } catch (e: Exception) {
+            throw e            } catch (e: Exception) {
             updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, e.localizedMessage ?: "Generation failed")
-            onError(e.localizedMessage ?: "Unexpected error")
+            onErrorCallback(e.localizedMessage ?: "Unexpected error")
         } finally {
             _isGenerating.value = false
             activeGenerationJob = null
         }
+    }
+
+    private fun apiKeyProviderId(): String = apiKeyRepository.getActiveProvider().name
+
+    private fun onErrorCallback(message: String) {
+        _isGenerating.value = false
+        activeGenerationJob?.cancel()
+        activeGenerationJob = null
+        onError(message)
     }
 
     private fun updateTraceStep(
@@ -415,6 +431,7 @@ class ChatRepository(
         steps[index] = next
         _currentTrace.value = steps.toList()
     }
+
 
     fun stopGeneration() {
         activeGenerationJob?.cancel()

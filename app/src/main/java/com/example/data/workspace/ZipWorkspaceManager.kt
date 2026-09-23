@@ -10,7 +10,9 @@ import com.tom_roush.pdfbox.text.PDFTextStripper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -20,6 +22,7 @@ class ZipWorkspaceManager(private val context: Context) {
 
     companion object {
         private const val MAX_TOTAL_UNCOMPRESSED_BYTES = 150 * 1024 * 1024L // 150 MB safety cap
+        private const val MAX_COMPRESSED_ARCHIVE_BYTES = 200 * 1024 * 1024L // 200 MB persisted upload cap
         private const val MAX_ENTRY_SIZE_BYTES = 25 * 1024 * 1024L // 25 MB max per file
         private const val MAX_ENTRIES_COUNT = 10_000
         private const val CHUNK_SIZE_CHARS = 3_000
@@ -44,8 +47,13 @@ class ZipWorkspaceManager(private val context: Context) {
     private val workspacesDir: File
         get() = File(context.filesDir, "sali_workspaces").apply { if (!exists()) mkdirs() }
 
+    /** The original uploaded archives are retained separately from extracted files. */
+    private val archivesDir: File
+        get() = File(context.filesDir, "sali_archives").apply { if (!exists()) mkdirs() }
+
     /**
-     * Safely extracts a ZIP input stream to a new workspace folder with Zip Slip protection.
+     * Safely stores the original ZIP and extracts it to a new workspace folder with
+     * Zip Slip, entry-count, and decompressed-size protection.
      */
     suspend fun extractZipToWorkspace(
         inputStream: InputStream,
@@ -53,6 +61,7 @@ class ZipWorkspaceManager(private val context: Context) {
     ): Result<WorkspaceSummary> = withContext(Dispatchers.IO) {
         val workspaceId = UUID.randomUUID().toString()
         val destDir = File(workspacesDir, workspaceId)
+        val archiveFile = File(archivesDir, "$workspaceId.zip")
         if (!destDir.mkdirs()) {
             return@withContext Result.failure(Exception("Failed to create workspace directory"))
         }
@@ -62,7 +71,23 @@ class ZipWorkspaceManager(private val context: Context) {
         var totalEntries = 0
 
         try {
-            ZipInputStream(inputStream).use { zis ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            archiveFile.outputStream().buffered().use { output ->
+                val buffer = ByteArray(8192)
+                var read: Int
+                var archiveBytes = 0L
+                while (inputStream.read(buffer).also { read = it } != -1) {
+                    archiveBytes += read
+                    if (archiveBytes > MAX_COMPRESSED_ARCHIVE_BYTES) {
+                        throw SecurityException("ZIP archive exceeds maximum upload size ($MAX_COMPRESSED_ARCHIVE_BYTES bytes)")
+                    }
+                    output.write(buffer, 0, read)
+                    digest.update(buffer, 0, read)
+                }
+            }
+            val archiveSha256 = digest.digest().toHexString()
+
+            ZipInputStream(FileInputStream(archiveFile)).use { zis ->
                 var entry: ZipEntry? = zis.nextEntry
                 while (entry != null) {
                     totalEntries++
@@ -108,12 +133,17 @@ class ZipWorkspaceManager(private val context: Context) {
                 }
             }
 
-            // Analyze extracted workspace
-            val summary = analyzeWorkspace(workspaceId, destDir, workspaceName)
+            // Analyze extracted workspace. The archive metadata is retained so the
+            // original upload can be reused/exported and its integrity can be checked.
+            val summary = analyzeWorkspace(workspaceId, destDir, workspaceName).copy(
+                archivePath = archiveFile.absolutePath,
+                archiveSha256 = archiveSha256
+            )
             Result.success(summary)
         } catch (e: Exception) {
-            // Clean up partially extracted files on failure
+            // Clean up partially extracted files on failure, including the durable copy.
             destDir.deleteRecursively()
+            archiveFile.delete()
             Result.failure(e)
         }
     }
@@ -324,6 +354,39 @@ class ZipWorkspaceManager(private val context: Context) {
         return chunks
     }
 
+    /**
+     * Builds a bounded, labelled context for a serious project review. It includes
+     * the persisted workspace summary, file inventory, and more chunks than the
+     * lightweight chat retrieval path, while remaining safe for model context limits.
+     */
+    fun buildDeepAnalysisContext(
+        workspaceIds: List<String>,
+        userQuery: String,
+        maxChunksPerWorkspace: Int = 24,
+        maxTotalChars: Int = 120_000
+    ): String {
+        val output = StringBuilder("--- DEEP PROJECT ANALYSIS CONTEXT ---\n")
+        workspaceIds.distinct().forEachIndexed { index, workspaceId ->
+            if (output.length >= maxTotalChars) return@forEachIndexed
+            val root = File(workspacesDir, workspaceId)
+            if (!root.exists()) return@forEachIndexed
+            val summary = analyzeWorkspace(workspaceId, root, "Stored project version ${index + 1}")
+            output.append("\n### PROJECT VERSION ${index + 1} [$workspaceId]\n")
+            output.append("Project type: ${summary.projectType}\n")
+            output.append("Files: ${summary.totalFiles}; directories: ${summary.totalDirectories}; extracted size: ${summary.totalSizeBytes} bytes\n")
+            output.append("Key files: ${summary.keyFiles.joinToString(", ").ifBlank { "none detected" }}\n")
+            output.append("Extensions: ${summary.fileExtensionsDistribution.entries.sortedByDescending { it.value }.take(12).joinToString { ".${it.key}=${it.value}" }}\n")
+            output.append("Archive SHA-256 is available in local metadata; do not infer file contents from the hash.\n")
+
+            getRelevantWorkspaceChunks(workspaceId, userQuery, maxChunksPerWorkspace).forEach { chunk ->
+                if (output.length >= maxTotalChars) return@forEach
+                output.append("\nFILE ${chunk.filePath} [chunk ${chunk.chunkIndex}/${chunk.totalChunks}]\n")
+                output.append(chunk.content).append('\n')
+            }
+        }
+        return output.toString().take(maxTotalChars)
+    }
+
     private fun readTextLikeFile(file: File): String {
         if (file.name.endsWith(".pdf", ignoreCase = true)) {
             return try {
@@ -339,7 +402,7 @@ class ZipWorkspaceManager(private val context: Context) {
             var entry = zip.nextEntry
             while (entry != null) {
                 if (entry.name == "word/document.xml") {
-                    document = zip.readBytes().toString(Charsets.UTF_8)
+                    document = readZipEntryTextBounded(zip, 4 * 1024 * 1024L)
                     break
                 }
                 entry = zip.nextEntry
@@ -350,6 +413,20 @@ class ZipWorkspaceManager(private val context: Context) {
             .replace(Regex("<[^>]+>"), "")
             .replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
             .trim()
+    }
+
+    private fun readZipEntryTextBounded(zip: ZipInputStream, maxBytes: Long): String {
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        var total = 0L
+        while (total < maxBytes) {
+            val read = zip.read(buffer)
+            if (read == -1) break
+            val usable = minOf(read.toLong(), maxBytes - total).toInt()
+            output.write(buffer, 0, usable)
+            total += usable
+        }
+        return output.toString(Charsets.UTF_8.name())
     }
 
     private fun chunkString(text: String, chunkSize: Int): List<String> {
@@ -365,11 +442,14 @@ class ZipWorkspaceManager(private val context: Context) {
     }
 
     fun deleteWorkspace(workspaceId: String) {
-        val dir = File(workspacesDir, workspaceId)
-        if (dir.exists()) {
-            dir.deleteRecursively()
-        }
+        File(workspacesDir, workspaceId).takeIf(File::exists)?.deleteRecursively()
+        File(archivesDir, "$workspaceId.zip").takeIf(File::exists)?.delete()
     }
+
+    fun getStoredArchive(workspaceId: String): File? =
+        File(archivesDir, "$workspaceId.zip").takeIf { it.isFile }
+
+    private fun ByteArray.toHexString(): String = joinToString("") { byte -> "%02x".format(byte) }
 
     /** Exports one or more imported workspaces to a shareable ZIP in cache storage. */
     fun exportWorkspaces(workspaceIds: List<String>, archiveName: String): File {

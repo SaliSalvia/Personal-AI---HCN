@@ -23,6 +23,8 @@ enum class AiProvider(
     CUSTOM("Custom endpoint", "Any OpenAI-compatible API endpoint", null);
 
     companion object {
+        /** Auto-detect provider from key prefix when possible.
+         * Returns null for providers/custom endpoints that require explicit selection. */
         fun detectFromKey(key: String): AiProvider? = when {
             key.trim().startsWith("AIza") -> GOOGLE_AI_STUDIO
             key.trim().startsWith("gsk_") -> GROQ
@@ -31,5 +33,8 @@ enum class AiProvider(
         }
 
         val catalog: List<AiProvider> = entries
+
+        /** Default provider for a provider-neutral app is HCNSEC. */
+        val defaultProvider: AiProvider get() = HCNSEC
     }
 }

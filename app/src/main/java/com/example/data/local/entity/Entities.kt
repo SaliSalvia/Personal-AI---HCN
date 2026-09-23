@@ -49,6 +49,8 @@ data class WorkspaceEntity(
     val fileCount: Int = 0,
     val totalSizeBytes: Long = 0L,
     val summary: String? = null,
+    val archivePath: String? = null,
+    val archiveSha256: String? = null,
     val createdAt: Long = System.currentTimeMillis()
 )
 

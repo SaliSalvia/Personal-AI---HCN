@@ -22,6 +22,9 @@ class WorkspaceMultiVersionTest {
         val v2 = manager.extractZipToWorkspace(versionZip("v2", "secure"), "project-v2.zip").getOrThrow()
 
         assertTrue(v1.workspaceId != v2.workspaceId)
+        assertTrue(v1.archivePath?.let { java.io.File(it).isFile } == true)
+        assertTrue(v1.archiveSha256?.matches(Regex("[0-9a-f]{64}")) == true)
+        assertTrue(manager.getStoredArchive(v2.workspaceId)?.isFile == true)
         assertTrue(v1.totalFiles >= 5)
         assertTrue(v2.totalFiles >= 5)
 
@@ -34,6 +37,16 @@ class WorkspaceMultiVersionTest {
         assertTrue(combined.contains("Markdown evidence"))
         assertTrue(v1Chunks.any { it.filePath.endsWith("report.pdf") })
         assertTrue(v2Chunks.any { it.filePath.endsWith("report.pdf") })
+
+        val deepContext = manager.buildDeepAnalysisContext(
+            listOf(v1.workspaceId, v2.workspaceId),
+            "compare architecture secure documentation",
+            maxChunksPerWorkspace = 20
+        )
+        assertTrue(deepContext.contains("PROJECT VERSION 1"))
+        assertTrue(deepContext.contains("PROJECT VERSION 2"))
+        assertTrue(deepContext.contains("Main.kt"))
+        assertTrue(deepContext.contains("DOCX evidence"))
     }
 
     private fun versionZip(version: String, feature: String): java.io.InputStream {

@@ -21,7 +21,9 @@ data class WorkspaceSummary(
     val totalSizeBytes: Long,
     val keyFiles: List<String>,
     val fileExtensionsDistribution: Map<String, Int>,
-    val structureOverview: String
+    val structureOverview: String,
+    val archivePath: String? = null,
+    val archiveSha256: String? = null
 )
 
 data class FileChunk(
