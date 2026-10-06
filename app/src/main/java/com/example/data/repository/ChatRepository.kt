@@ -279,7 +279,7 @@ class ChatRepository(
             val providerClient = providerRegistry.get(apiKeyProviderId())
                 ?: throw IllegalStateException("Active AI provider is not registered")
             if (!providerClient.descriptor.supportsStreaming) {
-                onErrorCallback("${providerClient.descriptor.displayName} does not support streaming")
+                onError("${providerClient.descriptor.displayName} does not support streaming")
                 return@withContext
             }
             providerClient.streamChat(
@@ -345,7 +345,7 @@ class ChatRepository(
                     }
                     is ProviderStreamEvent.Error -> {
                         updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, event.message)
-                        onErrorCallback(event.message)
+                        onError(event.message)
                     }
                 }
             }
@@ -394,9 +394,10 @@ class ChatRepository(
                     )
                 }
             }
-            throw e            } catch (e: Exception) {
+            throw e
+        } catch (e: Exception) {
             updateTraceStep(steps, "step_stream", TraceStepStatus.FAILED, e.localizedMessage ?: "Generation failed")
-            onErrorCallback(e.localizedMessage ?: "Unexpected error")
+            onError(e.localizedMessage ?: "Unexpected error")
         } finally {
             _isGenerating.value = false
             activeGenerationJob = null
@@ -404,13 +405,6 @@ class ChatRepository(
     }
 
     private fun apiKeyProviderId(): String = apiKeyRepository.getActiveProvider().name
-
-    private fun onErrorCallback(message: String) {
-        _isGenerating.value = false
-        activeGenerationJob?.cancel()
-        activeGenerationJob = null
-        onError(message)
-    }
 
     private fun updateTraceStep(
         steps: MutableList<TraceStep>,
