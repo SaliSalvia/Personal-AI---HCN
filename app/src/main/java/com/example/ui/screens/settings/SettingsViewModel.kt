@@ -17,31 +17,38 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 sealed class ConnectionTestState {
-    object Idle : ConnectionTestState()
-    object Testing : ConnectionTestState()
-    data class Success(val modelCount: Int) : ConnectionTestState()
+    data object Idle : ConnectionTestState()
+    data object Testing : ConnectionTestState()
+    data class Success(val provider: AiProvider, val modelCount: Int) : ConnectionTestState()
     data class Error(val message: String) : ConnectionTestState()
 }
 
+/**
+ * Settings now manage a *set* of provider credentials. Any number of providers can be
+ * connected at the same time and all of them stay live for the agent.
+ */
 class SettingsViewModel(
     private val apiKeyRepository: ApiKeyRepository,
     private val apiClient: HcnsecApiClient,
     private val modelRepository: ModelRepository
 ) : ViewModel() {
 
-    val maskedApiKey: String
-        get() = apiKeyRepository.getMaskedApiKey()
+    private val _configuredProviders = MutableStateFlow(apiKeyRepository.getConfiguredProviders().toSet())
+    val configuredProviders = _configuredProviders.asStateFlow()
 
-    private val _activeProvider = MutableStateFlow(apiKeyRepository.getActiveProvider())
-    val activeProvider = _activeProvider.asStateFlow()
-
-    fun selectProvider(provider: AiProvider) {
-        apiKeyRepository.setActiveProvider(provider)
-        _activeProvider.value = provider
-    }
+    fun isProviderConfigured(provider: AiProvider): Boolean = provider in _configuredProviders.value
 
     fun providerKeyStatus(provider: AiProvider): String = apiKeyRepository.getMaskedProviderKey(provider)
 
+    fun refreshConfigured() {
+        _configuredProviders.value = apiKeyRepository.getConfiguredProviders().toSet()
+    }
+
+    /**
+     * Validates and stores a key for [provider]. The provider can be auto-detected from
+     * the key prefix, and the key is stored under the detected provider so a pasted key
+     * is never filed under the wrong API.
+     */
     fun saveProviderKey(
         provider: AiProvider,
         key: String,
@@ -51,7 +58,11 @@ class SettingsViewModel(
         onError: (String) -> Unit
     ) {
         viewModelScope.launch {
-            val detectedProvider = AiProvider.detectFromKey(key) ?: provider
+            val detectedProvider = if (provider == AiProvider.CUSTOM) {
+                provider
+            } else {
+                AiProvider.detectFromKey(key) ?: provider
+            }
             try {
                 if (detectedProvider == AiProvider.CUSTOM) {
                     apiKeyRepository.saveCustomProvider(customBaseUrl.orEmpty(), customModel)
@@ -60,17 +71,30 @@ class SettingsViewModel(
                 onError(e.message ?: "Invalid custom provider settings")
                 return@launch
             }
-            apiKeyRepository.setActiveProvider(detectedProvider)
-            _activeProvider.value = detectedProvider
-            val result = apiClient.validateApiKey(key)
+            val result = apiClient.validateApiKey(detectedProvider, key)
             result.fold(
                 onSuccess = {
                     apiKeyRepository.saveProviderKey(detectedProvider, key)
+                    refreshConfigured()
                     modelRepository.refreshModels()
                     onSuccess(detectedProvider)
                 },
                 onFailure = { onError(it.message ?: "Provider key validation failed") }
             )
+        }
+    }
+
+    /** Removes one provider's key; [onAllRemoved] fires only when no provider is left. */
+    fun removeProviderKey(provider: AiProvider, onAllRemoved: () -> Unit = {}) {
+        viewModelScope.launch {
+            if (provider == AiProvider.CUSTOM) {
+                apiKeyRepository.clearCustomProvider()
+            } else {
+                apiKeyRepository.clearProviderKey(provider)
+            }
+            refreshConfigured()
+            modelRepository.refreshModels()
+            if (_configuredProviders.value.isEmpty()) onAllRemoved()
         }
     }
 
@@ -94,6 +118,10 @@ class SettingsViewModel(
         loadAccountUsage()
     }
 
+    fun clearTestState() {
+        _testState.value = ConnectionTestState.Idle
+    }
+
     fun setAutoRouting(enabled: Boolean) {
         _isAutoRouting.value = enabled
         apiKeyRepository.setAutoRoutingEnabled(enabled)
@@ -104,21 +132,18 @@ class SettingsViewModel(
         apiKeyRepository.setDefaultModel(modelId)
     }
 
-    fun testConnection() {
-        apiKeyRepository.setActiveProvider(AiProvider.HCNSEC)
-        _activeProvider.value = AiProvider.HCNSEC
-        val key = apiKeyRepository.getApiKey()
+    /** Validates the stored key of a single provider without touching the others. */
+    fun testProvider(provider: AiProvider) {
+        val key = apiKeyRepository.getProviderKey(provider)
         if (key.isNullOrBlank()) {
-            _testState.value = ConnectionTestState.Error("No API key stored")
+            _testState.value = ConnectionTestState.Error("No key stored for ${provider.displayName}")
             return
         }
-
         viewModelScope.launch {
             _testState.value = ConnectionTestState.Testing
-            val result = apiClient.validateApiKey(key)
-            result.fold(
+            apiClient.validateApiKey(provider, key).fold(
                 onSuccess = { models ->
-                    _testState.value = ConnectionTestState.Success(models.size)
+                    _testState.value = ConnectionTestState.Success(provider, models.size)
                 },
                 onFailure = { err ->
                     _testState.value = ConnectionTestState.Error(err.message ?: "Connection test failed")
@@ -127,38 +152,18 @@ class SettingsViewModel(
         }
     }
 
-    fun updateApiKey(newKey: String, onSuccess: () -> Unit, onError: (String) -> Unit) {
-        apiKeyRepository.setActiveProvider(AiProvider.HCNSEC)
-        _activeProvider.value = AiProvider.HCNSEC
+    fun removeAllKeys(onRemoved: () -> Unit) {
         viewModelScope.launch {
-            val result = apiClient.validateApiKey(newKey)
-            result.fold(
-                onSuccess = {
-                    apiKeyRepository.saveApiKey(newKey)
-                    modelRepository.refreshModels()
-                    onSuccess()
-                },
-                onFailure = { err ->
-                    onError(err.message ?: "Failed to validate new key")
+            AiProvider.catalog.forEach { provider ->
+                if (provider == AiProvider.CUSTOM) {
+                    apiKeyRepository.clearCustomProvider()
+                } else {
+                    apiKeyRepository.clearProviderKey(provider)
                 }
-            )
-        }
-    }
-
-    fun removeApiKey(onRemoved: () -> Unit) {
-        apiKeyRepository.clearApiKey()
-        onRemoved()
-    }
-
-    fun addCustomModel(modelId: String) {
-        viewModelScope.launch {
-            modelRepository.addCustomModel(modelId)
-        }
-    }
-
-    fun deleteCustomModel(modelId: String) {
-        viewModelScope.launch {
-            modelRepository.deleteCustomModel(modelId)
+            }
+            refreshConfigured()
+            modelRepository.refreshModels()
+            onRemoved()
         }
     }
 

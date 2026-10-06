@@ -66,6 +66,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.api.AiProvider
 import com.example.ui.screens.chat.components.AgentTraceView
 import com.example.ui.screens.chat.components.AttachmentTray
 import com.example.ui.screens.chat.components.ChatInputBar
@@ -124,6 +125,16 @@ fun ChatScreen(
     var showModelSheet by remember { mutableStateOf(false) }
     var showOptionsMenu by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // The selected model is identified across providers, so surface which API owns it.
+    val selectedModelDisplay = remember(selectedModelId, availableModels) {
+        when {
+            selectedModelId == "auto" -> "Auto (Optimal)"
+            else -> availableModels.firstOrNull { it.selectionKey == selectedModelId }?.let { model ->
+                "${AiProvider.displayNameOf(model.providerId)} · ${model.displayName}"
+            } ?: selectedModelId
+        }
+    }
 
     // File pickers
     val genericFileLauncher = rememberLauncherForActivityResult(
@@ -412,7 +423,7 @@ fun ChatScreen(
                     inputText = inputText,
                     onInputChanged = { viewModel.onInputChanged(it) },
                     isGenerating = isGenerating,
-                    selectedModelDisplay = if (selectedModelId == "auto") "Auto (Optimal)" else selectedModelId,
+                    selectedModelDisplay = selectedModelDisplay,
                     onOpenModelSelector = { showModelSheet = true },
                     onAttachFile = { genericFileLauncher.launch("*/*") },
                     onAttachZip = { zipLauncher.launch("application/zip") },

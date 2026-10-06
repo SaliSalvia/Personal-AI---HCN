@@ -1,5 +1,6 @@
 package com.example.data.repository
 
+import com.example.domain.provider.AiProviderClient
 import com.example.domain.provider.AiProviderRegistry
 import com.example.domain.provider.ProviderMessage
 import com.example.domain.provider.ProviderStreamEvent
@@ -188,28 +189,48 @@ class ChatRepository(
 
         updateTraceStep(steps, "step_context", TraceStepStatus.COMPLETED)
 
-        // Step 3: Model Routing
-        steps.add(TraceStep("step_route", "Select HCNSEC model", "Evaluating capabilities and task profile", TraceStepStatus.RUNNING))
+        // Step 3: Model Routing across every configured provider
+        steps.add(TraceStep("step_route", "Select model", "Evaluating capabilities across all configured providers", TraceStepStatus.RUNNING))
         _currentTrace.value = steps.toList()
 
-        val resolvedModelId: String
-        if (selectedModelId == "auto") {
+        // The selected model carries its owning provider, so the agent routes to the
+        // right API instead of a single globally "active" provider. In auto mode the
+        // router picks the best model across all configured providers.
+        val selectedModel: AiModel? = if (selectedModelId == "auto") {
             val task = modelRouter.classifyTask(
                 query = userPrompt,
                 hasAttachments = attachments.isNotEmpty(),
-                hasZipWorkspace = workspaceId != null,
+                hasZipWorkspace = workspaceId != null || workspaceIds.isNotEmpty(),
                 hasImages = attachments.any { it.mimeType.startsWith("image/") }
             )
-            val routed = modelRouter.selectModel(task, availableModels)
-            resolvedModelId = routed?.id ?: availableModels.firstOrNull()?.id ?: "deepseek-chat"
-            updateTraceStep(steps, "step_route", TraceStepStatus.COMPLETED, "Selected: $resolvedModelId (${task.label})")
+            modelRouter.selectModel(task, availableModels)
         } else {
-            resolvedModelId = selectedModelId
-            updateTraceStep(steps, "step_route", TraceStepStatus.COMPLETED, "Using: $resolvedModelId")
+            availableModels.firstOrNull { it.selectionKey == selectedModelId }
+                ?: availableModels.firstOrNull { it.id == selectedModelId }
         }
 
-        // Step 4: Stream response through the active provider adapter
-        steps.add(TraceStep("step_stream", "Generate response", "Streaming tokens via active AI provider", TraceStepStatus.RUNNING))
+        val activeProvider = apiKeyRepository.getActiveProvider()
+        val routedProviderId = selectedModel?.providerId?.takeIf { it.isNotBlank() }
+            ?.takeIf { providerRegistry.get(it) != null }
+            ?: activeProvider.name
+        val providerClient: AiProviderClient = providerRegistry.get(routedProviderId)
+            ?: providerRegistry.defaultClient()
+            ?: throw IllegalStateException("No AI provider is configured. Add an API key in Settings.")
+
+        val resolvedModelId: String = selectedModel?.id
+            ?: selectedModelId.takeIf { it != "auto" && it.isNotBlank() }
+            ?: availableModels.firstOrNull()?.id
+            ?: throw IllegalStateException("No model is available from the configured providers.")
+
+        updateTraceStep(
+            steps,
+            "step_route",
+            TraceStepStatus.COMPLETED,
+            "Using $resolvedModelId via ${providerClient.descriptor.displayName}"
+        )
+
+        // Step 4: Stream response through the provider that owns the selected model
+        steps.add(TraceStep("step_stream", "Generate response", "Streaming tokens via ${providerClient.descriptor.displayName}", TraceStepStatus.RUNNING))
         _currentTrace.value = steps.toList()
 
         // Fetch conversation history
@@ -220,7 +241,7 @@ class ChatRepository(
         apiMessages.add(
             ProviderMessage(
                 role = "system",
-                content = "You are SALi-HCNSEC, a production-quality personal AI Agent powered exclusively by HCNSEC. Provide accurate, clean, structured responses with clear markdown and syntax-highlighted code blocks."
+                content = "You are Salvia-H.Ai, a production-quality personal AI agent that can run on any configured provider (Google AI Studio, HCNSEC, Groq, OpenRouter and more). Provide accurate, clean, structured responses with clear markdown and syntax-highlighted code blocks."
             )
         )
 
@@ -276,8 +297,6 @@ class ChatRepository(
         }
 
         try {
-            val providerClient = providerRegistry.get(apiKeyProviderId())
-                ?: throw IllegalStateException("Active AI provider is not registered")
             if (!providerClient.descriptor.supportsStreaming) {
                 onError("${providerClient.descriptor.displayName} does not support streaming")
                 return@withContext
@@ -403,8 +422,6 @@ class ChatRepository(
             activeGenerationJob = null
         }
     }
-
-    private fun apiKeyProviderId(): String = apiKeyRepository.getActiveProvider().name
 
     private fun updateTraceStep(
         steps: MutableList<TraceStep>,

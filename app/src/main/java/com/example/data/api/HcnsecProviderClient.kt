@@ -26,13 +26,14 @@ class HcnsecProviderClient(
     )
 
     override suspend fun listModels(): Result<List<ProviderModel>> =
-        transport.getModels().map { models -> models.map { it.toProviderModel() } }
+        transport.getModels(provider).map { models -> models.map { it.toProviderModel() } }
 
     override fun streamChat(
         modelId: String,
         messages: List<ProviderMessage>,
         temperature: Double
     ): Flow<ProviderStreamEvent> = transport.streamChatCompletion(
+        provider = provider,
         model = modelId,
         messages = messages.map { ChatMessageDto(role = it.role, content = it.content) },
         temperature = temperature

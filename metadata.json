@@ -1,6 +1,6 @@
 {
-  "name": "Sali-HCNSEC",
-  "description": "Personal AI Agent powered exclusively by your HCNSEC API account.",
+  "name": "Salvia-H.Ai",
+  "description": "Provider-neutral personal AI agent. Connect several providers at once (Google AI Studio, HCNSEC, Groq, OpenRouter and more) and use all of their models from one workspace.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
