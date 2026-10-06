@@ -8,7 +8,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
-import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -25,6 +24,13 @@ sealed class StreamEvent {
     data class Error(val message: String, val code: Int? = null) : StreamEvent()
 }
 
+/**
+ * Stateless HTTP gateway for the OpenAI-compatible and native Gemini APIs.
+ *
+ * Every method takes the [AiProvider] it must talk to explicitly, so several providers
+ * can stream at the same time without racing over a single "active provider" flag. The
+ * client is safe to share across all providers because it holds no per-provider state.
+ */
 class HcnsecApiClient(
     private val apiKeyRepository: ApiKeyRepository
 ) {
@@ -34,9 +40,13 @@ class HcnsecApiClient(
         private const val OPEN_ROUTER_BASE_URL = "https://openrouter.ai/api/v1"
         private const val GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-    }
 
-    private fun activeProvider(): AiProvider = apiKeyRepository.getActiveProvider()
+        /** Fallback catalogue for Google AI Studio when live discovery is unavailable. */
+        private val GEMINI_FALLBACK_MODELS = listOf(
+            HcnsecModelDto("gemini-2.5-flash", ownedBy = "Google"),
+            HcnsecModelDto("gemini-2.5-pro", ownedBy = "Google")
+        )
+    }
 
     private fun baseUrl(provider: AiProvider): String = when (provider) {
         AiProvider.HCNSEC -> BASE_URL
@@ -52,28 +62,10 @@ class HcnsecApiClient(
     // would drag kotlin-reflect (plus its startup cost) into the APK.
     private val moshi: Moshi = Moshi.Builder().build()
 
-    private val authInterceptor = Interceptor { chain ->
-        val provider = activeProvider()
-        val apiKey = apiKeyRepository.getProviderKey(provider) ?: ""
-        val originalRequest = chain.request()
-        val builder = originalRequest.newBuilder()
-            .header("Accept", "application/json")
-            .header("User-Agent", "Sali-HCNSEC-Android/1.0")
-        if (provider != AiProvider.GOOGLE_AI_STUDIO) {
-            builder.header("Authorization", "Bearer $apiKey")
-        }
-        if (provider == AiProvider.OPEN_ROUTER) {
-            builder.header("X-Title", "Salvia H.Ai")
-        }
-        val authenticatedRequest = builder.build()
-        chain.proceed(authenticatedRequest)
-    }
-
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
-        .addInterceptor(authInterceptor)
         .retryOnConnectionFailure(true)
         .build()
 
@@ -82,68 +74,89 @@ class HcnsecApiClient(
     private val streamChunkAdapter = moshi.adapter(ChatStreamChunkDto::class.java)
     private val errorAdapter = moshi.adapter(ApiErrorResponse::class.java)
 
-    /**
-     * Validates connection to HCNSEC API by testing with the given key.
-     */
-    suspend fun validateApiKey(keyToTest: String): Result<List<HcnsecModelDto>> = withContext(Dispatchers.IO) {
-        try {
-            val provider = activeProvider()
-            if (provider == AiProvider.GOOGLE_AI_STUDIO) {
-                // The key travels in a header rather than a query string so it never
-                // ends up in proxy logs, crash reports or URL history.
-                val request = Request.Builder()
-                    .url("$GEMINI_BASE_URL/models")
-                    .header("x-goog-api-key", keyToTest.trim())
-                    .get()
-                    .build()
-                OkHttpClient().newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@withContext Result.failure(Exception("Google AI Studio key was rejected (HTTP ${response.code})."))
-                    return@withContext Result.success(listOf("gemini-2.5-flash", "gemini-2.5-pro").map { HcnsecModelDto(it, ownedBy = "Google") })
-                }
-            }
-            val request = Request.Builder()
-                .url("${baseUrl(activeProvider())}/models")
-                .header("Authorization", "Bearer ${keyToTest.trim()}")
-                .get()
-                .build()
-
-            val tempClient = OkHttpClient.Builder()
-                .connectTimeout(15, TimeUnit.SECONDS)
-                .readTimeout(15, TimeUnit.SECONDS)
-                .build()
-
-            tempClient.newCall(request).execute().use { response ->
-                val bodyString = response.body?.string().orEmpty()
-                if (response.isSuccessful) {
-                    val parsed = modelListAdapter.fromJson(bodyString)
-                    val models = parsed?.data.orEmpty()
-                    Result.success(models)
-                } else {
-                    val errorMsg = parseErrorMessage(response.code, bodyString)
-                    Result.failure(Exception(errorMsg))
-                }
-            }
-        } catch (e: Exception) {
-            Result.failure(Exception(formatNetworkError(e)))
+    /** Builds a request with the auth headers for a specific provider. */
+    private fun authorizedRequest(provider: AiProvider, url: String, apiKey: String? = null): Request.Builder {
+        val builder = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .header("User-Agent", "Salvia-H.Ai-Android/1.0")
+        if (provider != AiProvider.GOOGLE_AI_STUDIO) {
+            val key = apiKey ?: apiKeyRepository.getProviderKey(provider).orEmpty()
+            builder.header("Authorization", "Bearer $key")
         }
+        if (provider == AiProvider.OPEN_ROUTER) {
+            builder.header("X-Title", "Salvia H.Ai")
+        }
+        return builder
     }
 
     /**
-     * Retrieves the available models from HCNSEC API.
+     * Validates a candidate key against [provider] before it is stored. The key is passed
+     * in explicitly so onboarding/settings can test a key that is not yet persisted.
      */
-    suspend fun getModels(): Result<List<HcnsecModelDto>> = withContext(Dispatchers.IO) {
-        try {
-            val provider = activeProvider()
-            if (provider == AiProvider.GOOGLE_AI_STUDIO) {
-                return@withContext Result.success(listOf(
-                    HcnsecModelDto("gemini-2.5-flash", ownedBy = "Google"),
-                    HcnsecModelDto("gemini-2.5-pro", ownedBy = "Google")
-                ))
+    suspend fun validateApiKey(provider: AiProvider, keyToTest: String): Result<List<HcnsecModelDto>> =
+        withContext(Dispatchers.IO) {
+            try {
+                if (provider == AiProvider.GOOGLE_AI_STUDIO) {
+                    // The key travels in a header rather than a query string so it never
+                    // ends up in proxy logs, crash reports or URL history.
+                    val request = Request.Builder()
+                        .url("$GEMINI_BASE_URL/models")
+                        .header("x-goog-api-key", keyToTest.trim())
+                        .get()
+                        .build()
+                    OkHttpClient().newCall(request).execute().use { response ->
+                        if (!response.isSuccessful) {
+                            return@withContext Result.failure(Exception("Google AI Studio key was rejected (HTTP ${response.code})."))
+                        }
+                        val parsed = parseGeminiModels(response.body?.string().orEmpty())
+                        return@withContext Result.success(parsed.ifEmpty { GEMINI_FALLBACK_MODELS })
+                    }
+                }
+                val request = authorizedRequest(provider, "${baseUrl(provider)}/models", keyToTest.trim())
+                    .get()
+                    .build()
+
+                val tempClient = OkHttpClient.Builder()
+                    .connectTimeout(15, TimeUnit.SECONDS)
+                    .readTimeout(15, TimeUnit.SECONDS)
+                    .build()
+
+                tempClient.newCall(request).execute().use { response ->
+                    val bodyString = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val parsed = modelListAdapter.fromJson(bodyString)
+                        Result.success(parsed?.data.orEmpty())
+                    } else {
+                        Result.failure(Exception(parseErrorMessage(provider, response.code, bodyString)))
+                    }
+                }
+            } catch (e: Exception) {
+                Result.failure(Exception(formatNetworkError(provider, e)))
             }
-            val request = Request.Builder()
-                .url("${baseUrl(provider)}/models")
-                .get()
-                .build()
+        }
+
+    /** Retrieves the model catalogue of [provider]. */
+    suspend fun getModels(provider: AiProvider): Result<List<HcnsecModelDto>> = withContext(Dispatchers.IO) {
+        try {
+            if (provider == AiProvider.GOOGLE_AI_STUDIO) {
+                val key = apiKeyRepository.getProviderKey(AiProvider.GOOGLE_AI_STUDIO).orEmpty()
+                val request = Request.Builder()
+                    .url("$GEMINI_BASE_URL/models")
+                    .header("x-goog-api-key", key)
+                    .get()
+                    .build()
+                return@withContext try {
+                    okHttpClient.newCall(request).execute().use { response ->
+                        val body = response.body?.string().orEmpty()
+                        val parsed = if (response.isSuccessful) parseGeminiModels(body) else emptyList()
+                        Result.success(parsed.ifEmpty { GEMINI_FALLBACK_MODELS })
+                    }
+                } catch (_: Exception) {
+                    Result.success(GEMINI_FALLBACK_MODELS)
+                }
+            }
+            val request = authorizedRequest(provider, "${baseUrl(provider)}/models").get().build()
 
             okHttpClient.newCall(request).execute().use { response ->
                 val bodyString = response.body?.string().orEmpty()
@@ -151,24 +164,34 @@ class HcnsecApiClient(
                     val parsed = modelListAdapter.fromJson(bodyString)
                     Result.success(parsed?.data.orEmpty())
                 } else {
-                    val errorMsg = parseErrorMessage(response.code, bodyString)
-                    Result.failure(Exception(errorMsg))
+                    Result.failure(Exception(parseErrorMessage(provider, response.code, bodyString)))
                 }
             }
         } catch (e: Exception) {
-            Result.failure(Exception(formatNetworkError(e)))
+            Result.failure(Exception(formatNetworkError(provider, e)))
         }
     }
 
-    /**
-     * Streams chat completion chunks via Server-Sent Events (SSE).
-     */
+    /** Parses Google AI Studio's native `{"models":[{"name":"models/gemini-…"}]}` list. */
+    private fun parseGeminiModels(body: String): List<HcnsecModelDto> = try {
+        val models = org.json.JSONObject(body).optJSONArray("models") ?: org.json.JSONArray()
+        (0 until models.length()).mapNotNull { index ->
+            val name = models.optJSONObject(index)?.optString("name").orEmpty()
+            if (name.isBlank()) null
+            else HcnsecModelDto(id = name.removePrefix("models/"), ownedBy = "Google")
+        }
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /** Streams chat completion chunks via Server-Sent Events (SSE) from [provider]. */
     fun streamChatCompletion(
+        provider: AiProvider,
         model: String,
         messages: List<ChatMessageDto>,
         temperature: Double = 0.7
     ): Flow<StreamEvent> = flow {
-        if (activeProvider() == AiProvider.GOOGLE_AI_STUDIO) {
+        if (provider == AiProvider.GOOGLE_AI_STUDIO) {
             streamGemini(model, messages, temperature).collect { emit(it) }
             return@flow
         }
@@ -181,8 +204,7 @@ class HcnsecApiClient(
             )
         )
 
-        val request = Request.Builder()
-            .url("${baseUrl(activeProvider())}/chat/completions")
+        val request = authorizedRequest(provider, "${baseUrl(provider)}/chat/completions")
             .post(requestBodyJson.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
@@ -196,13 +218,13 @@ class HcnsecApiClient(
 
             if (!response.isSuccessful) {
                 val errorBody = response.body?.string().orEmpty()
-                val message = parseErrorMessage(response.code, errorBody)
+                val message = parseErrorMessage(provider, response.code, errorBody)
                 emit(StreamEvent.Error(message, response.code))
                 return@flow
             }
 
             val body = response.body ?: run {
-                emit(StreamEvent.Error("Empty response body from HCNSEC API"))
+                emit(StreamEvent.Error("Empty response body from ${provider.displayName}"))
                 return@flow
             }
 
@@ -227,7 +249,7 @@ class HcnsecApiClient(
                         val choice = chunk?.choices?.firstOrNull()
                         val delta = choice?.delta
 
-                        // Official reasoning parameter check (DeepSeek-R1 / HCNSEC reasoner)
+                        // Official reasoning parameter check (DeepSeek-R1 / reasoner models)
                         val reasoning = delta?.reasoningContent
                         if (!reasoning.isNullOrEmpty()) {
                             emit(StreamEvent.Reasoning(reasoning))
@@ -256,7 +278,7 @@ class HcnsecApiClient(
             call?.cancel()
             throw e
         } catch (e: Exception) {
-            emit(StreamEvent.Error(formatNetworkError(e)))
+            emit(StreamEvent.Error(formatNetworkError(provider, e)))
         } finally {
             try {
                 reader?.close()
@@ -271,14 +293,12 @@ class HcnsecApiClient(
      * If balance cannot be retrieved through an official API endpoint, clearly communicate that limitation."
      */
     suspend fun getAccountUsage(): Result<UserBalanceDto?> = withContext(Dispatchers.IO) {
-        // This is an HCNSEC-specific endpoint. Never send another provider's key
-        // to it when the user has switched providers.
-        if (activeProvider() != AiProvider.HCNSEC) return@withContext Result.success(null)
+        // This is an HCNSEC-specific endpoint. Never send another provider's key to it.
+        if (!apiKeyRepository.isProviderConfigured(AiProvider.HCNSEC)) {
+            return@withContext Result.success(null)
+        }
         try {
-            val request = Request.Builder()
-                .url("$BASE_URL/dashboard/billing/usage")
-                .get()
-                .build()
+            val request = authorizedRequest(AiProvider.HCNSEC, "$BASE_URL/dashboard/billing/usage").get().build()
 
             okHttpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
@@ -343,39 +363,35 @@ class HcnsecApiClient(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            emit(StreamEvent.Error(formatNetworkError(e)))
+            emit(StreamEvent.Error(formatNetworkError(AiProvider.GOOGLE_AI_STUDIO, e)))
         }
     }.flowOn(Dispatchers.IO)
 
-    private fun parseErrorMessage(code: Int, bodyString: String): String {
-        // The active provider can be Groq/OpenRouter/Gemini, so blaming HCNSEC for
-        // every failure sent users to the wrong settings screen.
-        val provider = activeProvider().displayName
+    private fun parseErrorMessage(provider: AiProvider, code: Int, bodyString: String): String {
         return try {
             val errorObj = errorAdapter.fromJson(bodyString)
             val msg = errorObj?.error?.message
             when (code) {
-                401 -> "Invalid $provider API key. Please verify your credentials in Settings."
-                403 -> "Access forbidden for this $provider model or resource."
-                429 -> "Rate limit reached on the $provider API. Please wait a moment before sending more messages."
-                500, 502, 503 -> "$provider server error ($code). The service is currently experiencing high load."
+                401 -> "Invalid ${provider.displayName} API key. Please verify your credentials in Settings."
+                403 -> "Access forbidden for this ${provider.displayName} model or resource."
+                429 -> "Rate limit reached on the ${provider.displayName} API. Please wait a moment before sending more messages."
+                500, 502, 503 -> "${provider.displayName} server error ($code). The service is currently experiencing high load."
                 else -> msg ?: "HTTP $code: Request failed."
             }
         } catch (_: Exception) {
             when (code) {
-                401 -> "Invalid $provider API key."
-                429 -> "$provider rate limit exceeded."
+                401 -> "Invalid ${provider.displayName} API key."
+                429 -> "${provider.displayName} rate limit exceeded."
                 else -> "Server returned error code $code"
             }
         }
     }
 
-    private fun formatNetworkError(e: Throwable): String {
-        val provider = activeProvider().displayName
+    private fun formatNetworkError(provider: AiProvider, e: Throwable): String {
         return when (e) {
             is java.net.UnknownHostException -> "Network unavailable. Please check your internet connection."
-            is java.net.SocketTimeoutException -> "Request timed out while connecting to $provider."
-            is IOException -> "Connection interrupted: ${e.localizedMessage ?: "I/O error"}"
+            is java.net.SocketTimeoutException -> "Request timed out while connecting to ${provider.displayName}."
+            is IOException -> "Connection interrupted: " + (e.localizedMessage ?: "network I/O error")
             else -> e.localizedMessage ?: "An unexpected error occurred."
         }
     }

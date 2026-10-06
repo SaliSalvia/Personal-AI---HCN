@@ -51,7 +51,7 @@ private fun AppNavContent(
     navController: NavHostController
 ) {
     val startDestination = remember {
-        if (appContainer.apiKeyRepository.hasApiKey()) Screen.Chat.createRoute() else Screen.Onboarding.route
+        if (appContainer.apiKeyRepository.hasAnyConfiguredProvider()) Screen.Chat.createRoute() else Screen.Onboarding.route
     }
 
     NavHost(navController = navController, startDestination = startDestination) {

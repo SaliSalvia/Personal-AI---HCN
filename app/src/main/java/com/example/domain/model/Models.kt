@@ -15,8 +15,17 @@ data class AiModel(
     val isCustom: Boolean = false,
     val isFavorite: Boolean = false,
     val capabilities: Set<ModelCapability> = emptySet(),
-    val description: String = ""
-)
+    val description: String = "",
+    /** Owning provider id ([com.example.data.api.AiProvider.name]). Blank for legacy/local models. */
+    val providerId: String = ""
+) {
+    /**
+     * Globally unique key across providers. Model ids are only unique inside a single
+     * provider (e.g. `llama-3.1-8b` exists on several APIs), so the provider is part of
+     * the selection identity used by the picker and the agent router.
+     */
+    val selectionKey: String get() = if (providerId.isBlank()) id else "$providerId::$id"
+}
 
 enum class TaskCategory(val label: String) {
     GENERAL_CHAT("General Conversation"),

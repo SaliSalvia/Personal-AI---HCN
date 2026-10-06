@@ -3,6 +3,7 @@ package com.example.ui.screens.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.api.AiProvider
 import com.example.data.api.HcnsecApiClient
 import com.example.data.repository.ModelRepository
 import com.example.data.security.ApiKeyRepository
@@ -39,26 +40,30 @@ class OnboardingViewModel(
     fun validateAndConnect(onSuccess: () -> Unit) {
         val key = _apiKeyInput.value.trim()
         if (key.isEmpty()) {
-            _validationState.value = OnboardingValidationState.Error("Please enter your HCNSEC API key")
+            _validationState.value = OnboardingValidationState.Error("Please enter an API key")
             return
         }
+
+        // First provider is auto-detected from the key prefix; more providers can be
+        // added afterwards from Settings and stay active at the same time.
+        val provider = AiProvider.detectFromKey(key) ?: AiProvider.HCNSEC
 
         viewModelScope.launch {
             _validationState.value = OnboardingValidationState.Validating
 
-            val result = apiClient.validateApiKey(key)
+            val result = apiClient.validateApiKey(provider, key)
             result.fold(
                 onSuccess = { models ->
                     // Securely save via Android Keystore
-                    apiKeyRepository.saveApiKey(key)
-                    // Fetch models to cache
+                    apiKeyRepository.saveProviderKey(provider, key)
+                    // Fetch models from every configured provider to cache
                     modelRepository.refreshModels()
                     _validationState.value = OnboardingValidationState.Success(models.size)
                     onSuccess()
                 },
                 onFailure = { error ->
                     _validationState.value = OnboardingValidationState.Error(
-                        error.message ?: "Validation failed. Please check your HCNSEC key and network connection."
+                        error.message ?: "Validation failed. Please check your API key and network connection."
                     )
                 }
             )

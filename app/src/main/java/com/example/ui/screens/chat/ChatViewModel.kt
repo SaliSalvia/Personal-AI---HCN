@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.example.data.api.AiProvider
 import com.example.data.local.entity.ConversationEntity
 import com.example.data.local.entity.WorkspaceEntity
 import com.example.data.repository.ChatRepository
@@ -263,7 +264,7 @@ class ChatViewModel(
         apiKeyRepository.setDefaultModel(modelId)
     }
 
-    /** Fetches the models available to the currently configured HCNSEC key. */
+    /** Fetches the models available from every configured provider. */
     fun refreshAvailableModels() {
         viewModelScope.launch {
             modelRepository.refreshModels()
@@ -271,16 +272,18 @@ class ChatViewModel(
     }
 
     fun addCustomModel(modelId: String) {
+        val trimmed = modelId.trim()
         viewModelScope.launch {
-            modelRepository.addCustomModel(modelId)
-            selectModel(modelId)
+            modelRepository.addCustomModel(trimmed)
+            selectModel("${AiProvider.CUSTOM.name}::$trimmed")
         }
     }
 
     fun deleteCustomModel(modelId: String) {
         viewModelScope.launch {
             modelRepository.deleteCustomModel(modelId)
-            if (_selectedModelId.value == modelId) {
+            val customKey = "${AiProvider.CUSTOM.name}::$modelId"
+            if (_selectedModelId.value == modelId || _selectedModelId.value == customKey) {
                 selectModel("auto")
             }
         }
@@ -620,7 +623,7 @@ class ChatViewModel(
         val convTitle = conversations.value.find { it.id == convId }?.title ?: "Chat"
         val sb = StringBuilder()
         sb.append("# ").append(convTitle).append("\n\n")
-        sb.append("> Exported from Salvia-H.Ai • HCNSEC-first multi-provider AI workspace\n\n")
+        sb.append("> Exported from Salvia-H.Ai • provider-neutral multi-provider AI workspace\n\n")
         sb.append("---\n\n")
 
         for (msg in _messages.value) {

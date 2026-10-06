@@ -12,9 +12,34 @@ import org.junit.Test
 
 class ProviderRegistryTest {
     @Test
-    fun `registry defaults to HCNSEC id`() {
+    fun `registry does not force a single default provider`() {
         val registry = DefaultAiProviderRegistry()
-        assertEquals(AiProvider.HCNSEC.name, registry.defaultProviderId)
+        assertTrue(registry.defaultProviderId.isEmpty())
+        assertEquals(null, registry.defaultClient())
+    }
+
+    @Test
+    fun `multiple providers coexist simultaneously`() {
+        val registry = DefaultAiProviderRegistry()
+        registry.register(FakeClient(ProviderDescriptor(
+            id = AiProvider.HCNSEC.name,
+            displayName = "HCNSEC",
+            description = "Official HCNSEC OpenAI-compatible API"
+        )))
+        registry.register(FakeClient(ProviderDescriptor(
+            id = AiProvider.GOOGLE_AI_STUDIO.name,
+            displayName = "Google AI Studio",
+            description = "Native Gemini API"
+        )))
+        registry.register(FakeClient(ProviderDescriptor(
+            id = AiProvider.OPEN_ROUTER.name,
+            displayName = "OpenRouter",
+            description = "Many free and paid models through one API"
+        )))
+        assertEquals(3, registry.all().size)
+        assertNotNull(registry.get(AiProvider.HCNSEC.name))
+        assertNotNull(registry.get(AiProvider.GOOGLE_AI_STUDIO.name))
+        assertNotNull(registry.get(AiProvider.OPEN_ROUTER.name))
     }
 
     @Test

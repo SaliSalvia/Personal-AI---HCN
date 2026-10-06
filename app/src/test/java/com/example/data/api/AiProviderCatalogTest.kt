@@ -22,4 +22,12 @@ class AiProviderCatalogTest {
         assertEquals(AiProvider.GROQ, AiProvider.detectFromKey("gsk_test-key"))
         assertEquals(AiProvider.OPEN_ROUTER, AiProvider.detectFromKey("sk-or-test-key"))
     }
+
+    @Test
+    fun providerDisplayNamesResolveSafely() {
+        assertEquals("OpenRouter", AiProvider.displayNameOf(AiProvider.OPEN_ROUTER.name))
+        assertEquals("HCNSEC", AiProvider.displayNameOf(AiProvider.HCNSEC.name))
+        assertEquals("Unknown provider", AiProvider.displayNameOf(""))
+        assertEquals("legacy-id", AiProvider.displayNameOf("legacy-id"))
+    }
 }

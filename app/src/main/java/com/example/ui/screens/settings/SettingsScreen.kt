@@ -1,7 +1,5 @@
 package com.example.ui.screens.settings
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -21,7 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -58,13 +56,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.R
 import com.example.data.api.AiProvider
 import com.example.data.settings.AppLanguage
 import com.example.data.settings.LanguageRepository
@@ -92,22 +88,17 @@ fun SettingsScreen(
     val defaultModel by viewModel.defaultModel.collectAsState()
     val testState by viewModel.testState.collectAsState()
     val accountUsage by viewModel.accountUsage.collectAsState()
-    val availableModels by viewModel.availableModels.collectAsState()
+    val configuredProviders by viewModel.configuredProviders.collectAsState()
     val language by languageRepository.language.collectAsState()
     val strings = LocalAppStrings.current
 
-    var showChangeKeyDialog by remember { mutableStateOf(false) }
-    var showRemoveKeyDialog by remember { mutableStateOf(false) }
-    var newKeyInput by remember { mutableStateOf("") }
-    var changeKeyError by remember { mutableStateOf<String?>(null) }
-    var isUpdatingKey by remember { mutableStateOf(false) }
-    val activeProvider by viewModel.activeProvider.collectAsState()
     var providerDialog by remember { mutableStateOf<AiProvider?>(null) }
     var providerKeyInput by remember { mutableStateOf("") }
     var customBaseUrlInput by remember { mutableStateOf("") }
     var customModelInput by remember { mutableStateOf("") }
     var providerError by remember { mutableStateOf<String?>(null) }
     var isSavingProvider by remember { mutableStateOf(false) }
+    var removeTarget by remember { mutableStateOf<AiProvider?>(null) }
 
     Scaffold(
         topBar = {
@@ -143,7 +134,7 @@ fun SettingsScreen(
         ) {
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Language is intentionally first: switching it immediately updates every screen.
+            // Language
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -171,225 +162,119 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            // SECTION 1: HCNSEC API KEY CREDENTIALS
+            // SECTION 1: provider credentials (several can be connected at once)
             Text(
-                text = "HCNSEC CREDENTIALS",
+                text = "AI PROVIDERS",
                 color = VioletLight,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "Connect as many providers as you want. Every configured API stays live, and all of their models become available to the agent.",
+                color = TextSecondary,
+                fontSize = 11.sp,
+                lineHeight = 16.sp
+            )
+            Spacer(modifier = Modifier.height(10.dp))
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // Last connection test result
+            when (val state = testState) {
+                is ConnectionTestState.Testing -> StatusBanner(
+                    color = VioletPrimary,
+                    icon = Icons.Default.Sync,
+                    text = "Testing connection…"
+                )
+                is ConnectionTestState.Success -> StatusBanner(
+                    color = SuccessGreen,
+                    icon = Icons.Default.CheckCircle,
+                    text = "${state.provider.displayName}: verified ${state.modelCount} models"
+                )
+                is ConnectionTestState.Error -> StatusBanner(
+                    color = ErrorRed,
+                    icon = Icons.Default.ErrorOutline,
+                    text = state.message
+                )
+                ConnectionTestState.Idle -> {}
+            }
 
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp)),
-                shape = RoundedCornerShape(14.dp),
-                color = DarkSurface
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clip(CircleShape)
-                                .background(Color(0xFF261942)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Key,
-                                contentDescription = null,
-                                tint = VioletLight,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+            AiProvider.catalog.forEach { provider ->
+                val configured = provider in configuredProviders
+                ProviderCard(
+                    provider = provider,
+                    configured = configured,
+                    maskedKey = if (configured) viewModel.providerKeyStatus(provider) else null,
+                    onAdd = {
+                        providerDialog = provider
+                        providerKeyInput = ""
+                        customBaseUrlInput = ""
+                        customModelInput = ""
+                        providerError = null
+                    },
+                    onReplace = {
+                        providerDialog = provider
+                        providerKeyInput = ""
+                        customBaseUrlInput = ""
+                        customModelInput = ""
+                        providerError = null
+                    },
+                    onTest = { viewModel.testProvider(provider) },
+                    onRemove = { removeTarget = provider }
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
 
-                        Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Current API Key",
-                                color = TextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = viewModel.maskedApiKey,
-                                color = TextSecondary,
-                                fontSize = 13.sp,
-                                fontFamily = FontFamily.Monospace
-                            )
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    // Test connection status feedback
-                    when (testState) {
-                        is ConnectionTestState.Testing -> {
+            if (viewModel.isProviderConfigured(AiProvider.HCNSEC)) {
+                Text(
+                    text = "HCNSEC ACCOUNT & USAGE",
+                    color = VioletLight,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.5.sp
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, DarkBorder, RoundedCornerShape(14.dp)),
+                    shape = RoundedCornerShape(14.dp),
+                    color = DarkSurface
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        if (accountUsage != null && accountUsage?.totalAvailable != null) {
                             Row(
-                                modifier = Modifier.padding(bottom = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(14.dp),
-                                    color = VioletPrimary,
-                                    strokeWidth = 2.dp
+                                Text("Available Balance", color = TextSecondary, fontSize = 13.sp)
+                                Text(
+                                    text = "${accountUsage?.totalAvailable} ${accountUsage?.currency ?: "CNY"}",
+                                    color = SuccessGreen,
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold
                                 )
+                            }
+                        } else {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
                                 Spacer(modifier = Modifier.width(8.dp))
-                                Text("Pinging https://api.hcnsec.cn/v1...", color = VioletLight, fontSize = 12.sp)
+                                Text(
+                                    text = "The HCNSEC usage balance endpoint is not published by the current server configuration. Token counts are recorded during active sessions.",
+                                    color = TextSecondary,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
                             }
-                        }
-                        is ConnectionTestState.Success -> {
-                            val count = (testState as ConnectionTestState.Success).modelCount
-                            Row(
-                                modifier = Modifier
-                                    .padding(bottom = 12.dp)
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0x2210B981))
-                                    .padding(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SuccessGreen, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Online: verified $count models from HCNSEC.", color = Color(0xFFA7F3D0), fontSize = 12.sp)
-                            }
-                        }
-                        is ConnectionTestState.Error -> {
-                            val msg = (testState as ConnectionTestState.Error).message
-                            Row(
-                                modifier = Modifier
-                                    .padding(bottom = 12.dp)
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color(0x22EF4444))
-                                    .padding(8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(msg, color = Color(0xFFFCA5A5), fontSize = 12.sp)
-                            }
-                        }
-                        else -> {}
-                    }
-
-                    // Key Actions
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { viewModel.testConnection() },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(38.dp)
-                                .testTag("test_connection_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Sync, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Test", fontSize = 12.sp, color = TextPrimary)
-                        }
-
-                        Button(
-                            onClick = { showChangeKeyDialog = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(38.dp)
-                                .testTag("change_key_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Update", fontSize = 12.sp, color = Color.White)
-                        }
-
-                        Button(
-                            onClick = { showRemoveKeyDialog = true },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(38.dp)
-                                .testTag("remove_key_button"),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF381515)),
-                            shape = RoundedCornerShape(8.dp)
-                        ) {
-                            Icon(Icons.Default.Delete, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(14.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("Remove", fontSize = 12.sp, color = ErrorRed)
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(18.dp))
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // SECTION 2: ADDITIONAL AI PROVIDERS
-            Text(
-                text = "ADDITIONAL AI PROVIDERS",
-                color = VioletLight,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp)),
-                shape = RoundedCornerShape(14.dp),
-                color = DarkSurface
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        "Paste a provider key below. Salvia detects Google AI Studio (AIza…), Groq (gsk_…) and OpenRouter (sk-or-…) automatically, validates it, and stores it encrypted.",
-                        color = TextSecondary,
-                        fontSize = 12.sp,
-                        lineHeight = 17.sp
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    AiProvider.values().filter { it != AiProvider.HCNSEC }.forEach { provider ->
-                        val configured = viewModel.providerKeyStatus(provider) != "No key configured"
-                        Button(
-                            onClick = {
-                                if (configured) {
-                                    viewModel.selectProvider(provider)
-                                } else {
-                                    providerDialog = provider
-                                    providerKeyInput = ""
-                                    customBaseUrlInput = ""
-                                    customModelInput = ""
-                                    providerError = null
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().height(42.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (activeProvider == provider) VioletPrimary else DarkSurfaceVariant
-                            ),
-                            shape = RoundedCornerShape(9.dp)
-                        ) {
-                            Text(
-                                "${provider.displayName}${if (configured) "  •  Configured" else "  •  Add key"}",
-                                color = TextPrimary,
-                                fontSize = 12.sp
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // SECTION 3: INTELLIGENT ROUTING & PREFERENCES
+            // SECTION 2: routing & preferences
             Text(
                 text = "ROUTING & MODEL PREFERENCES",
                 color = VioletLight,
@@ -397,9 +282,7 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
-
             Spacer(modifier = Modifier.height(8.dp))
-
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -416,7 +299,7 @@ fun SettingsScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text("Auto Model Routing", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                             Text(
-                                "Intelligently classifies tasks (coding, math proof, creative, workspace) to optimal HCNSEC model",
+                                "Classifies each request (coding, math, vision, workspace analysis) and picks the best model across all connected providers",
                                 color = TextSecondary,
                                 fontSize = 11.sp
                             )
@@ -437,7 +320,7 @@ fun SettingsScreen(
                     Text("Default Model", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = if (defaultModel == "auto") "Auto Routing" else defaultModel,
+                        text = if (defaultModel == "auto") "Auto Routing" else AiProvider.displayNameOf(defaultModel.substringBefore("::")),
                         color = VioletLight,
                         fontSize = 13.sp,
                         fontWeight = FontWeight.SemiBold
@@ -447,56 +330,7 @@ fun SettingsScreen(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // SECTION 3: ACCOUNT USAGE / BILLING
-            Text(
-                text = "HCNSEC ACCOUNT & USAGE",
-                color = VioletLight,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.5.sp
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp)),
-                shape = RoundedCornerShape(14.dp),
-                color = DarkSurface
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    if (accountUsage != null && accountUsage?.totalAvailable != null) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Available Balance", color = TextSecondary, fontSize = 13.sp)
-                            Text(
-                                text = "${accountUsage?.totalAvailable} ${accountUsage?.currency ?: "CNY"}",
-                                color = SuccessGreen,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Default.Info, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "Official usage balance endpoint is not published by the current HCNSEC server configuration. Token counts are recorded during active sessions.",
-                                color = TextSecondary,
-                                fontSize = 11.sp,
-                                lineHeight = 15.sp
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // SECTION 4: SECURITY & PLATFORM GUARANTEE
+            // SECTION 3: security guarantee
             Text(
                 text = "SECURITY GUARANTEE",
                 color = VioletLight,
@@ -504,9 +338,7 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.5.sp
             )
-
             Spacer(modifier = Modifier.height(8.dp))
-
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -518,11 +350,11 @@ fun SettingsScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Lock, contentDescription = null, tint = VioletPrimary, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("HCNSEC-First & Hardware-Backed Keystore", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text("Provider-neutral & Hardware-Backed Keystore", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "• HCNSEC is the default provider; Google AI Studio, Groq and OpenRouter are optional and only used when you add a key for them.\n• API Keys are encrypted using AES-GCM via AndroidKeyStore.\n• Requests are sent only to the provider you have activated.",
+                        text = "• Every provider key you add is used side by side; each request goes only to the provider that owns the selected model.\n• API keys are encrypted with AES-GCM via AndroidKeyStore.\n• You can connect or remove any provider at any time.",
                         color = TextSecondary,
                         fontSize = 12.sp,
                         lineHeight = 17.sp
@@ -534,8 +366,7 @@ fun SettingsScreen(
         }
     }
 
-    // Additional provider key dialog. Detection is performed again in the ViewModel
-    // so a pasted key is never silently stored under the wrong provider.
+    // Add / replace provider key dialog
     providerDialog?.let { requestedProvider ->
         AlertDialog(
             onDismissRequest = { if (!isSavingProvider) providerDialog = null },
@@ -629,82 +460,14 @@ fun SettingsScreen(
         )
     }
 
-    // Update API Key Dialog
-    if (showChangeKeyDialog) {
+    // Remove provider key dialog
+    removeTarget?.let { target ->
         AlertDialog(
-            onDismissRequest = {
-                showChangeKeyDialog = false
-                changeKeyError = null
-            },
-            title = { Text("Update HCNSEC API Key", color = TextPrimary) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = newKeyInput,
-                        onValueChange = { newKeyInput = it },
-                        placeholder = { Text("sk-...", color = Color(0xFF64748B)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = VioletPrimary,
-                            unfocusedBorderColor = DarkBorder
-                        )
-                    )
-
-                    if (changeKeyError != null) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(changeKeyError!!, color = ErrorRed, fontSize = 12.sp)
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newKeyInput.isNotBlank()) {
-                            isUpdatingKey = true
-                            viewModel.updateApiKey(
-                                newKey = newKeyInput.trim(),
-                                onSuccess = {
-                                    isUpdatingKey = false
-                                    showChangeKeyDialog = false
-                                    newKeyInput = ""
-                                },
-                                onError = { err ->
-                                    isUpdatingKey = false
-                                    changeKeyError = err
-                                }
-                            )
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
-                    enabled = !isUpdatingKey
-                ) {
-                    if (isUpdatingKey) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-                    } else {
-                        Text("Validate & Save")
-                    }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showChangeKeyDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
-                }
-            },
-            containerColor = DarkSurface
-        )
-    }
-
-    // Remove API Key Dialog
-    if (showRemoveKeyDialog) {
-        AlertDialog(
-            onDismissRequest = { showRemoveKeyDialog = false },
-            title = { Text("Remove API Key?", color = TextPrimary) },
+            onDismissRequest = { removeTarget = null },
+            title = { Text("Remove ${target.displayName} key?", color = TextPrimary) },
             text = {
                 Text(
-                    "This will delete the encrypted key from Android Keystore. You will need to enter an API key again to use Salvia-H.Ai.",
+                    "This deletes the encrypted key for ${target.displayName}. Other connected providers stay active.",
                     color = TextSecondary,
                     fontSize = 13.sp
                 )
@@ -712,20 +475,146 @@ fun SettingsScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        showRemoveKeyDialog = false
-                        viewModel.removeApiKey(onLoggedOut)
+                        val removing = target
+                        removeTarget = null
+                        viewModel.removeProviderKey(removing, onAllRemoved = onLoggedOut)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = ErrorRed)
-                ) {
-                    Text("Remove Key")
-                }
+                ) { Text("Remove key") }
             },
             dismissButton = {
-                TextButton(onClick = { showRemoveKeyDialog = false }) {
-                    Text("Cancel", color = TextSecondary)
-                }
+                TextButton(onClick = { removeTarget = null }) { Text("Cancel", color = TextSecondary) }
             },
             containerColor = DarkSurface
         )
+    }
+}
+
+@Composable
+private fun StatusBanner(color: Color, icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
+    Row(
+        modifier = Modifier
+            .padding(bottom = 10.dp)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(color.copy(alpha = 0.14f))
+            .padding(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(16.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(text, color = TextPrimary, fontSize = 12.sp)
+    }
+}
+
+@Composable
+private fun ProviderCard(
+    provider: AiProvider,
+    configured: Boolean,
+    maskedKey: String?,
+    onAdd: () -> Unit,
+    onReplace: () -> Unit,
+    onTest: () -> Unit,
+    onRemove: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                width = if (configured) 1.5.dp else 1.dp,
+                color = if (configured) VioletPrimary else DarkBorder,
+                shape = RoundedCornerShape(14.dp)
+            )
+            .testTag("provider_row_${provider.name}"),
+        shape = RoundedCornerShape(14.dp),
+        color = DarkSurface
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(if (configured) Color(0xFF261942) else DarkSurfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Key,
+                        contentDescription = null,
+                        tint = if (configured) VioletLight else TextSecondary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(provider.displayName, color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    Text(provider.description, color = TextSecondary, fontSize = 11.sp)
+                }
+                Text(
+                    text = if (configured) "Active" else "Off",
+                    color = if (configured) SuccessGreen else TextSecondary,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+
+            if (configured && maskedKey != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = maskedKey,
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            if (configured) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onTest,
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("test_key_${provider.name}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Sync, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Test", fontSize = 12.sp, color = TextPrimary)
+                    }
+                    Button(
+                        onClick = onReplace,
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("replace_key_${provider.name}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Replace", fontSize = 12.sp, color = Color.White)
+                    }
+                    Button(
+                        onClick = onRemove,
+                        modifier = Modifier.weight(1f).height(38.dp).testTag("remove_key_${provider.name}"),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF381515)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Remove", fontSize = 12.sp, color = ErrorRed)
+                    }
+                }
+            } else {
+                Button(
+                    onClick = onAdd,
+                    modifier = Modifier.fillMaxWidth().height(40.dp).testTag("add_key_${provider.name}"),
+                    colors = ButtonDefaults.buttonColors(containerColor = DarkSurfaceVariant),
+                    shape = RoundedCornerShape(8.dp)
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = null, tint = TextPrimary, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Add key", fontSize = 12.sp, color = TextPrimary)
+                }
+            }
+        }
     }
 }

@@ -34,7 +34,10 @@ enum class AiProvider(
 
         val catalog: List<AiProvider> = entries
 
-        /** Default provider for a provider-neutral app is HCNSEC. */
-        val defaultProvider: AiProvider get() = HCNSEC
+        /** Human-readable provider name for a stored provider id, without throwing. */
+        fun displayNameOf(providerId: String?): String {
+            if (providerId.isNullOrBlank()) return "Unknown provider"
+            return entries.firstOrNull { it.name == providerId }?.displayName ?: providerId
+        }
     }
 }

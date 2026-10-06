@@ -1,14 +1,14 @@
 # R8 / ProGuard rules for the release build of SALi-HCNSEC.
 #
-# Library consumer rules (Room, Retrofit, OkHttp, Compose) already cover most of
-# what is needed; the rules below protect the JSON layer, which is the only part
-# of this app that relies on reflective name lookups.
+# Library consumer rules (Room, OkHttp, Compose) already cover most of what is
+# needed; the rules below protect the JSON layer, which is the only part of this
+# app that relies on reflective name lookups.
 
 # --- Readable crash reports -------------------------------------------------
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile
 
-# Keep generic signatures / annotations needed by Retrofit + Moshi
+# Keep generic signatures / annotations needed by Moshi
 -keepattributes Signature,InnerClasses,EnclosingMethod
 -keepattributes RuntimeVisibleAnnotations,RuntimeVisibleParameterAnnotations
 -keepattributes AnnotationDefault
@@ -24,13 +24,7 @@
 -dontwarn com.squareup.moshi.**
 -dontwarn org.jetbrains.annotations.**
 
-# --- Retrofit ---------------------------------------------------------------
--keep,allowobfuscation,allowshrinking interface retrofit2.Call
--keep,allowobfuscation,allowshrinking class retrofit2.Response
--keep,allowobfuscation,allowshrinking class kotlin.coroutines.Continuation
--if interface * { @retrofit2.http.* public abstract *** *(...); }
--keep,allowobfuscation,allowshrinking class <1>
--dontwarn retrofit2.**
+# --- Networking (OkHttp, used directly — Retrofit is not part of the app) -----
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn org.conscrypt.**

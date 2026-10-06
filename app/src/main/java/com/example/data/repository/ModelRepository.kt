@@ -14,6 +14,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 
+/**
+ * Aggregates the model catalogues of *all* configured providers. The app is no longer
+ * tied to a single active provider: every provider with a stored key contributes its
+ * models, and each model remembers which provider owns it ([AiModel.providerId]).
+ */
 class ModelRepository(
     private val providerRegistry: AiProviderRegistry,
     private val customModelDao: CustomModelDao,
@@ -28,11 +33,17 @@ class ModelRepository(
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage = _errorMessage.asStateFlow()
 
-    /** Combined flow of active-provider models and user-saved custom models. */
+    /** Bumped whenever a favorite is toggled so [allModels] re-emits. */
+    private val _favoritesVersion = MutableStateFlow(0)
+
+    /** Combined flow of every configured provider's models plus user-saved custom models. */
     val allModels: Flow<List<AiModel>> = combine(
         _apiModels,
-        customModelDao.getAllCustomModels()
-    ) { apiList, customList ->
+        customModelDao.getAllCustomModels(),
+        _favoritesVersion
+    ) { apiList, customList, _ ->
+        val favorites = apiKeyRepository.getFavoriteModelKeys()
+
         val customAiModels = customList.map { entity ->
             AiModel(
                 id = entity.id,
@@ -40,67 +51,100 @@ class ModelRepository(
                 isCustom = true,
                 isFavorite = entity.isFavorite,
                 capabilities = CapabilityRegistry.detectCapabilities(entity.id),
-                description = "Custom configured model for the active provider"
+                description = "Custom model id",
+                providerId = AiProvider.CUSTOM.name
             )
         }
 
-        // Merge: avoid duplicates
+        // Merge: avoid duplicating a model that a provider already lists.
         val customIds = customAiModels.map { it.id }.toSet()
-        val filteredApiList = apiList.filterNot { it.id in customIds }
+        val filteredApiList = apiList
+            .filterNot { it.id in customIds }
+            .map { model -> model.copy(isFavorite = model.isFavorite || favorites.contains(model.selectionKey)) }
+
         customAiModels + filteredApiList
     }
 
+    /**
+     * Loads models from every provider that has credentials. Providers are queried
+     * independently, so one failing API never hides the models of the others.
+     */
     suspend fun refreshModels(): Result<List<AiModel>> = withContext(Dispatchers.IO) {
-        val provider = apiKeyRepository.getActiveProvider()
-        if (!apiKeyRepository.hasProviderKey(provider)) {
-            return@withContext Result.failure(Exception("No ${provider.displayName} API key configured"))
+        val configured = apiKeyRepository.getConfiguredProviders()
+        if (configured.isEmpty()) {
+            _isLoading.value = false
+            _apiModels.value = emptyList()
+            _errorMessage.value = "No provider is configured yet. Add an API key in Settings to load models."
+            return@withContext Result.failure(Exception(_errorMessage.value))
         }
 
         _isLoading.value = true
         _errorMessage.value = null
 
-        val client = providerRegistry.get(provider.name)
-            ?: return@withContext Result.failure(Exception("${provider.displayName} provider is not registered"))
-        val result = client.listModels()
+        val collected = mutableListOf<AiModel>()
+        val failures = mutableListOf<String>()
 
-        if (!client.descriptor.supportsModelListing) {
-            // Fallback: treat configured model id as the visible option.
-            val configuredModel = apiKeyRepository.getProviderBaseUrl(provider)?.let { "${provider.name} configured model" } ?: provider.displayName
-            _apiModels.value = listOf(
-                AiModel(
-                    id = configuredModel,
-                    displayName = configuredModel,
-                    isCustom = false,
-                    isFavorite = false,
-                    capabilities = CapabilityRegistry.detectCapabilities(configuredModel),
-                    description = "${provider.displayName} model (manual endpoint)"
-                )
+        for (provider in configured) {
+            val client = providerRegistry.get(provider.name)
+            if (client == null) {
+                failures.add("${provider.displayName}: provider is not registered")
+                continue
+            }
+
+            if (!client.descriptor.supportsModelListing) {
+                // Endpoints that expose no catalogue still expose the manually configured id.
+                val manualId = apiKeyRepository.getCustomModel().trim()
+                if (provider == AiProvider.CUSTOM && manualId.isNotEmpty()) {
+                    collected.add(
+                        AiModel(
+                            id = manualId,
+                            displayName = manualId,
+                            isCustom = false,
+                            capabilities = CapabilityRegistry.detectCapabilities(manualId),
+                            description = "${provider.displayName} model (manual endpoint)",
+                            providerId = provider.name
+                        )
+                    )
+                }
+                continue
+            }
+
+            client.listModels().fold(
+                onSuccess = { providerModels ->
+                    collected.addAll(
+                        providerModels.map { model ->
+                            AiModel(
+                                id = model.id,
+                                displayName = model.displayName.ifBlank { model.id },
+                                isCustom = false,
+                                capabilities = model.capabilities.ifEmpty { CapabilityRegistry.detectCapabilities(model.id) },
+                                description = model.description.ifBlank { "${provider.displayName} model" },
+                                providerId = provider.name
+                            )
+                        }
+                    )
+                },
+                onFailure = { err ->
+                    failures.add("${provider.displayName}: ${err.message ?: "failed to load models"}")
+                }
             )
-            return@withContext Result.success(_apiModels.value)
         }
+
+        val aggregated = collected
+            .distinctBy { it.selectionKey }
+            .sortedWith(compareBy({ AiProvider.displayNameOf(it.providerId) }, { it.displayName.lowercase() }))
+
+        _apiModels.value = aggregated
         _isLoading.value = false
 
-        result.fold(
-            onSuccess = { dtoList ->
-                val models = dtoList.map { model ->
-                    AiModel(
-                        id = model.id,
-                        displayName = model.displayName,
-                        isCustom = false,
-                        isFavorite = false,
-                        capabilities = model.capabilities.ifEmpty { CapabilityRegistry.detectCapabilities(model.id) },
-                        description = model.description.ifBlank { "${provider.displayName} model" }
-                    )
-                }.sortedBy { it.displayName }
-
-                _apiModels.value = models
-                Result.success(models)
-            },
-            onFailure = { err ->
-                _errorMessage.value = err.message
-                Result.failure(err)
-            }
-        )
+        if (aggregated.isEmpty()) {
+            val message = failures.joinToString("; ").ifBlank { "No models were returned by the configured providers." }
+            _errorMessage.value = message
+            Result.failure(Exception(message))
+        } else {
+            if (failures.isNotEmpty()) _errorMessage.value = failures.joinToString("; ")
+            Result.success(aggregated)
+        }
     }
 
     suspend fun addCustomModel(modelId: String, displayName: String = modelId): Result<Unit> = withContext(Dispatchers.IO) {
@@ -120,6 +164,11 @@ class ModelRepository(
         customModelDao.deleteById(modelId)
     }
 
+    /**
+     * Toggles a favorite. Favorites of provider models are persisted separately from
+     * the custom-model table, so favoriting a listed model never spawns a duplicate
+     * "custom" row in the picker.
+     */
     suspend fun toggleFavorite(model: AiModel) = withContext(Dispatchers.IO) {
         if (model.isCustom) {
             customModelDao.update(
@@ -130,14 +179,8 @@ class ModelRepository(
                 )
             )
         } else {
-            // If it's an API model, we can save it as custom entity with isFavorite = true
-            customModelDao.insert(
-                CustomModelEntity(
-                    id = model.id,
-                    displayName = model.displayName,
-                    isFavorite = !model.isFavorite
-                )
-            )
+            apiKeyRepository.toggleFavoriteModelKey(model.selectionKey)
         }
+        _favoritesVersion.value++
     }
 }

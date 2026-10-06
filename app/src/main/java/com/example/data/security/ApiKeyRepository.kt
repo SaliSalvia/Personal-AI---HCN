@@ -28,6 +28,7 @@ class ApiKeyRepository(context: Context) {
         private const val KEY_DEFAULT_MODEL = "key_default_model"
         private const val KEY_CUSTOM_BASE_URL = "custom_base_url"
         private const val KEY_CUSTOM_MODEL = "custom_model"
+        private const val KEY_FAVORITES = "favorite_model_keys"
     }
 
     /**
@@ -89,9 +90,31 @@ class ApiKeyRepository(context: Context) {
 
     fun hasProviderKey(provider: AiProvider): Boolean = !getProviderKey(provider).isNullOrBlank()
 
-    fun getActiveProvider(): AiProvider = prefs.getString(KEY_ACTIVE_PROVIDER, AiProvider.HCNSEC.name)
-        ?.let { runCatching { AiProvider.valueOf(it) }.getOrDefault(AiProvider.HCNSEC) }
-        ?: AiProvider.HCNSEC
+    /**
+     * Every provider that currently has usable credentials. Multiple providers can be
+     * configured at once; all of their models are exposed to the agent simultaneously.
+     */
+    fun getConfiguredProviders(): List<AiProvider> = AiProvider.catalog.filter { isProviderConfigured(it) }
+
+    fun isProviderConfigured(provider: AiProvider): Boolean = when (provider) {
+        AiProvider.CUSTOM -> !getCustomBaseUrl().isNullOrBlank() && hasProviderKey(provider)
+        else -> hasProviderKey(provider)
+    }
+
+    /** True when at least one provider key exists (used to pick the start destination). */
+    fun hasAnyConfiguredProvider(): Boolean = getConfiguredProviders().isNotEmpty()
+
+    /**
+     * Preferred provider for flows that still need a single pick (onboarding, account
+     * usage). Falls back to the first configured provider and never hard-wires HCNSEC
+     * unless nothing at all is configured.
+     */
+    fun getActiveProvider(): AiProvider {
+        val stored = prefs.getString(KEY_ACTIVE_PROVIDER, null)
+            ?.let { runCatching { AiProvider.valueOf(it) }.getOrNull() }
+        if (stored != null && isProviderConfigured(stored)) return stored
+        return getConfiguredProviders().firstOrNull() ?: stored ?: AiProvider.HCNSEC
+    }
 
     fun setActiveProvider(provider: AiProvider) {
         prefs.edit().putString(KEY_ACTIVE_PROVIDER, provider.name).apply()
@@ -99,9 +122,11 @@ class ApiKeyRepository(context: Context) {
 
     fun getProviderBaseUrl(provider: AiProvider): String? {
         return if (provider == AiProvider.CUSTOM) {
-            prefs.getString(KEY_CUSTOM_BASE_URL, null)
+            getCustomBaseUrl()
         } else provider.defaultBaseUrl
     }
+
+    fun getCustomBaseUrl(): String? = prefs.getString(KEY_CUSTOM_BASE_URL, null)
 
     fun saveCustomProvider(baseUrl: String, model: String?) {
         val normalized = baseUrl.trim().removeSuffix("/")
@@ -159,6 +184,31 @@ class ApiKeyRepository(context: Context) {
 
     fun setDefaultModel(modelId: String) {
         prefs.edit().putString(KEY_DEFAULT_MODEL, modelId).apply()
+    }
+
+    /**
+     * Favorites are tracked by [AiModel.selectionKey] (`PROVIDER::model-id`) so a model
+     * favorited on one API is never confused with the same id on another. Keeping them
+     * out of the `custom_models` table also stops favorites from turning API models into
+     * duplicated "custom" entries in the picker.
+     */
+    fun getFavoriteModelKeys(): Set<String> =
+        prefs.getStringSet(KEY_FAVORITES, emptySet()) ?: emptySet()
+
+    fun isFavoriteModelKey(key: String): Boolean = key in getFavoriteModelKeys()
+
+    fun toggleFavoriteModelKey(key: String): Boolean {
+        if (key.isBlank()) return false
+        val current = getFavoriteModelKeys().toMutableSet()
+        val nowFavorite = if (key in current) {
+            current.remove(key)
+            false
+        } else {
+            current.add(key)
+            true
+        }
+        prefs.edit().putStringSet(KEY_FAVORITES, current).apply()
+        return nowFavorite
     }
 
     private fun ciphertextKey(provider: AiProvider) = if (provider == AiProvider.HCNSEC) KEY_CIPHERTEXT else "${provider.name}_$KEY_CIPHERTEXT"
