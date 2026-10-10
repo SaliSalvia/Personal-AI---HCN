@@ -20,7 +20,12 @@ object CapabilityRegistry {
         }
 
         // Coding models
-        if (lower.contains("coder") || lower.contains("code") || lower.contains("deepseek") || lower.contains("qwen2.5-72b")) {
+        if (
+            lower.contains("coder") || lower.contains("code") || lower.contains("-dev") ||
+            lower.contains("deepseek") || lower.contains("qwen2.5-72b") || lower.contains("qwen3") ||
+            lower.contains("codestral") ||
+            lower.startsWith("gpt-oss-")
+        ) {
             caps.add(ModelCapability.CODING)
         }
 
@@ -30,12 +35,26 @@ object CapabilityRegistry {
         }
 
         // Large Context
-        if (lower.contains("128k") || lower.contains("long") || lower.contains("deepseek") || lower.contains("qwen")) {
+        if (
+            lower.contains("128k") || lower.contains("long") || lower.contains("deepseek") ||
+            lower.contains("qwen") || lower.contains("gpt-oss") || lower.contains("gemini") ||
+            lower.contains("nemotron") || lower.contains("llama")
+        ) {
             caps.add(ModelCapability.LARGE_CONTEXT)
         }
 
-        // Fast chat
-        if (lower.contains("mini") || lower.contains("flash") || lower.contains("speed") || lower.contains("turbo") || lower.contains("7b") || lower.contains("8b")) {
+        // Fast chat — smallest/lowest-latency tiers across the free-provider catalogs.
+        if (
+            lower.contains("mini") || lower.contains("flash") || lower.contains("flash-lite") ||
+            lower.contains("speed") || lower.contains("turbo") || lower.contains("instant") ||
+            lower.contains("lightning") ||
+            lower.contains("-8b") || lower.contains("-7b") || lower.contains("3b-") ||
+            lower.contains("-3b") || lower.contains("-4b") || lower.contains("-6b") ||
+            lower.contains("27b") ||
+            lower.contains("litert") ||
+            lower.startsWith("gpt-oss-20b") || lower.contains("small-3") ||
+            lower.contains("nemotron-nano")
+        ) {
             caps.add(ModelCapability.FAST_CHAT)
         }
 
@@ -119,7 +138,41 @@ class AutoModelRouter {
     }
 
     /**
-     * Routes to the optimal available HCNSEC model for the given task category.
+     * Published generation-speed tier of each provider's fastest endpoint, ranked
+     * fastest first. Values come from the vendors' published model catalogs
+     * (Cerebras ~3000 tok/s for gpt-oss-120b, Groq ~1000 tok/s for gpt-oss-20b,
+     * SambaNova ~430 tok/s, Gemini Flash-Lite optimized for volume, OpenRouter free
+     * roster is dynamic). Tiers are coarse on purpose: they encode *relative* priority,
+     * not exact tok/s, so the ranking stays valid as numbers shift over time.
+     */
+    private val providerSpeedOrder = listOf(
+        "CEREBRAS",       // ~3000 tok/s catalog tops
+        "GROQ",           // ~1000 tok/s
+        "GOOGLE_AI_STUDIO", // Flash-Lite: fast, most generous renewable free tier
+        "SAMBANOVA",      // historically ~430 tok/s
+        "HCNSEC",         // user-preferred official endpoint
+        "OPEN_ROUTER",    // :free models are slow at peak, useful fallback
+        "NVIDIA",
+        "MISTRAL",
+        "FIREWORKS",
+        "DEEPINFRA",
+        "TOGETHER",
+        "COHERE",
+        "HUGGING_FACE",
+        "OPENAI",
+        "CUSTOM"
+    )
+
+    private fun speedRank(model: AiModel): Int {
+        val idx = providerSpeedOrder.indexOf(model.providerId)
+        return if (idx >= 0) idx else providerSpeedOrder.size
+    }
+
+    /**
+     * Routes to the optimal available model for the given task category. Ties are
+     * broken for maximum speed: provider speed tier first, then the FAST_CHAT flag
+     * (smaller models stream with lower latency and stronger published tok/s), then
+     * the original catalog order.
      */
     fun selectModel(
         task: TaskCategory,
@@ -132,16 +185,27 @@ class AutoModelRouter {
             TaskCategory.CODING, TaskCategory.FILE_PROJECT_ANALYSIS -> ModelCapability.CODING
             TaskCategory.VISION -> ModelCapability.VISION
             TaskCategory.LARGE_CONTEXT, TaskCategory.DOCUMENT_ANALYSIS -> ModelCapability.LARGE_CONTEXT
-            TaskCategory.GENERAL_CHAT -> ModelCapability.FAST_CHAT
+            // Chat latency is dominated by streaming speed: prefer fast models.
+            TaskCategory.GENERAL_CHAT, TaskCategory.SUMMARIZATION -> ModelCapability.FAST_CHAT
             else -> null
         }
 
-        if (priorityCapability != null) {
-            val matching = availableModels.firstOrNull { it.capabilities.contains(priorityCapability) }
-            if (matching != null) return matching
+        val pool = if (priorityCapability != null) {
+            val matching = availableModels.filter { it.capabilities.contains(priorityCapability) }
+            matching.ifEmpty { availableModels }
+        } else {
+            availableModels
         }
 
-        // Return first model or default
-        return availableModels.firstOrNull()
+        // Speed-first ranking within the filtered pool.
+        return pool
+            .sortedWith(
+                compareBy(
+                    { speedRank(it) },
+                    { !it.capabilities.contains(ModelCapability.FAST_CHAT) },
+                    { it.displayName.lowercase() }
+                )
+            )
+            .firstOrNull()
     }
 }

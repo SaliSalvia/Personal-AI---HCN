@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -62,11 +63,17 @@ class HcnsecApiClient(
     // would drag kotlin-reflect (plus its startup cost) into the APK.
     private val moshi: Moshi = Moshi.Builder().build()
 
+    // One long-lived client: keep-alive pooling avoids a fresh TLS handshake per
+    // chat request (the single biggest per-request cost after the model itself).
+    // connectTimeout stays low so a dead endpoint fails fast instead of hanging the
+    // router; callTimeout is deliberately absent — a slow generating model must not
+    // be cut off mid-stream.
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(120, TimeUnit.SECONDS)
-        .writeTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .retryOnConnectionFailure(true)
+        .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
         .build()
 
     private val modelListAdapter = moshi.adapter(HcnsecModelListResponse::class.java)
