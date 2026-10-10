@@ -19,6 +19,9 @@ interface CustomModelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(model: CustomModelEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(vararg models: CustomModelEntity)
+
     @Update
     suspend fun update(model: CustomModelEntity)
 
