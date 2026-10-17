@@ -23,6 +23,8 @@ class ZipWorkspaceManager(private val context: Context) {
     companion object {
         private const val MAX_TOTAL_UNCOMPRESSED_BYTES = 150 * 1024 * 1024L // 150 MB safety cap
         private const val MAX_COMPRESSED_ARCHIVE_BYTES = 200 * 1024 * 1024L // 200 MB persisted upload cap
+        // Protect phones from a 20-archive lab exhausting internal storage.
+        private const val MAX_TOTAL_PROJECT_LAB_BYTES = 1024L * 1024L * 1024L // 1 GiB including originals
         private const val MAX_ENTRY_SIZE_BYTES = 25 * 1024 * 1024L // 25 MB max per file
         private const val MAX_ENTRIES_COUNT = 10_000
         private const val MAX_COMPRESSION_RATIO = 1_000L
@@ -68,6 +70,7 @@ class ZipWorkspaceManager(private val context: Context) {
         }
 
         val canonicalDestDirPath = destDir.canonicalPath + File.separator
+        val existingStoredBytes = calculateStoredProjectBytes(excludingWorkspaceId = workspaceId)
         var totalBytesExtracted = 0L
         var totalEntries = 0
         // ZIP archives may contain duplicate names that overwrite earlier entries.
@@ -84,6 +87,9 @@ class ZipWorkspaceManager(private val context: Context) {
                     archiveBytes += read
                     if (archiveBytes > MAX_COMPRESSED_ARCHIVE_BYTES) {
                         throw SecurityException("ZIP archive exceeds maximum upload size ($MAX_COMPRESSED_ARCHIVE_BYTES bytes)")
+                    }
+                    if (existingStoredBytes + archiveBytes > MAX_TOTAL_PROJECT_LAB_BYTES) {
+                        throw SecurityException("Project Lab storage would exceed the 1 GiB total limit. Remove older project versions before importing more ZIPs.")
                     }
                     output.write(buffer, 0, read)
                     digest.update(buffer, 0, read)
@@ -144,6 +150,9 @@ class ZipWorkspaceManager(private val context: Context) {
                                 if (totalBytesExtracted > MAX_TOTAL_UNCOMPRESSED_BYTES) {
                                     throw SecurityException("Archive uncompressed size exceeds maximum allowance ($MAX_TOTAL_UNCOMPRESSED_BYTES bytes)")
                                 }
+                                if (existingStoredBytes + archiveBytes + totalBytesExtracted > MAX_TOTAL_PROJECT_LAB_BYTES) {
+                                    throw SecurityException("Project Lab storage would exceed the 1 GiB total limit. Remove older project versions before importing more ZIPs.")
+                                }
 
                                 output.write(buffer, 0, len)
                             }
@@ -179,6 +188,19 @@ class ZipWorkspaceManager(private val context: Context) {
             archiveFile.delete()
             Result.failure(e)
         }
+    }
+
+    /** Includes original archives and extracted files in the aggregate Project Lab storage budget. */
+    private fun calculateStoredProjectBytes(excludingWorkspaceId: String): Long {
+        val excludedArchiveName = "$excludingWorkspaceId.zip"
+        val archiveBytes = archivesDir.listFiles().orEmpty()
+            .filter { it.isFile && it.name != excludedArchiveName }
+            .sumOf { it.length() }
+        val excludedRootPrefix = File(workspacesDir, excludingWorkspaceId).absolutePath + File.separator
+        val extractedBytes = workspacesDir.walkTopDown()
+            .filter { it.isFile && !it.absolutePath.startsWith(excludedRootPrefix) }
+            .sumOf { it.length() }
+        return archiveBytes + extractedBytes
     }
 
     /**
