@@ -40,6 +40,34 @@ class WorkspaceDiffEngineTest {
     }
 
     @Test
+    fun rejectsSymbolicLinkThatEscapesWorkspaceRoot() {
+        val root = Files.createTempDirectory("sali-symlink-root").toFile()
+        val outside = Files.createTempFile("sali-outside", ".txt")
+        try {
+            Files.writeString(outside, "must not be read")
+            val link = root.toPath().resolve("external.txt")
+            try {
+                Files.createSymbolicLink(link, outside)
+            } catch (e: UnsupportedOperationException) {
+                return
+            } catch (e: java.io.IOException) {
+                // Some constrained environments disable symlink creation.
+                return
+            } catch (e: SecurityException) {
+                return
+            }
+
+            val result = runCatching {
+                WorkspaceDiffEngine().compare("v1", root, "v2", root)
+            }
+            assertTrue("Comparison must reject symlinks", result.isFailure)
+        } finally {
+            root.deleteRecursively()
+            Files.deleteIfExists(outside)
+        }
+    }
+
+    @Test
     fun rejectsMissingWorkspaceRoot() {
         val missing = Files.createTempDirectory("sali-missing").toFile().resolve("not-created")
         val existing = Files.createTempDirectory("sali-existing").toFile()
