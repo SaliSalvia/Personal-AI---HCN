@@ -253,7 +253,7 @@ class ChatViewModel(
                 }
             }
             _attachments.value = restoredAttachments
-            _activeWorkspaceId.value = restoredAttachments.lastOrNull()?.workspaceId
+            _activeWorkspaceId.value = restoredAttachments.lastOrNull()?.workspaceId ?: conv?.workspaceId
             if (restoredAttachments.size != savedWorkspaceIds.size) {
                 chatRepository.saveProjectLabWorkspaceIds(
                     conversationId,
