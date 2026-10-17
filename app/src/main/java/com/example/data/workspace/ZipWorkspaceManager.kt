@@ -481,6 +481,15 @@ class ZipWorkspaceManager(private val context: Context) {
     fun getStoredArchive(workspaceId: String): File? =
         File(archivesDir, "$workspaceId.zip").takeIf { it.isFile }
 
+    /** Compares two imported snapshots without mutating either original workspace. */
+    fun compareWorkspaces(leftWorkspaceId: String, rightWorkspaceId: String) =
+        WorkspaceDiffEngine().compare(
+            leftWorkspaceId = leftWorkspaceId,
+            leftRoot = File(workspacesDir, leftWorkspaceId),
+            rightWorkspaceId = rightWorkspaceId,
+            rightRoot = File(workspacesDir, rightWorkspaceId)
+        )
+
     private fun ByteArray.toHexString(): String = joinToString("") { byte -> "%02x".format(byte) }
 
     /** Exports one or more imported workspaces to a shareable ZIP in cache storage. */
