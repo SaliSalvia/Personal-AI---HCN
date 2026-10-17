@@ -73,6 +73,7 @@ class ZipWorkspaceManager(private val context: Context) {
         val existingStoredBytes = calculateStoredProjectBytes(excludingWorkspaceId = workspaceId)
         var totalBytesExtracted = 0L
         var totalEntries = 0
+        var archiveBytes = 0L
         // ZIP archives may contain duplicate names that overwrite earlier entries.
         // Track normalized names so extraction is deterministic and auditable.
         val seenEntryNames = mutableSetOf<String>()
@@ -82,7 +83,6 @@ class ZipWorkspaceManager(private val context: Context) {
             archiveFile.outputStream().buffered().use { output ->
                 val buffer = ByteArray(8192)
                 var read: Int
-                var archiveBytes = 0L
                 while (inputStream.read(buffer).also { read = it } != -1) {
                     archiveBytes += read
                     if (archiveBytes > MAX_COMPRESSED_ARCHIVE_BYTES) {
