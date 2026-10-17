@@ -73,6 +73,14 @@ class ChatRepository(
         conversationDao.getConversationById(id)
     }
 
+    /** Persist the selected project versions so staged analysis can resume after process death. */
+    suspend fun saveProjectLabWorkspaceIds(conversationId: String, workspaceIds: List<String>) =
+        withContext(Dispatchers.IO) {
+            val ids = workspaceIds.distinct().take(20)
+            val encoded = ids.takeIf { it.isNotEmpty() }?.joinToString(",")
+            conversationDao.updateProjectLabWorkspaceIds(conversationId, encoded)
+        }
+
     suspend fun saveDraftPrompt(id: String, draft: String?) = withContext(Dispatchers.IO) {
         conversationDao.updateDraftPrompt(id, draft)
     }
