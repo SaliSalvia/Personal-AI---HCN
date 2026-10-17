@@ -68,6 +68,19 @@ class WorkspaceMultiVersionTest {
         assertTrue("No file may be written outside the workspace", !File(context.filesDir, "escaped.txt").exists())
     }
 
+    @Test
+    fun ambiguousRepeatedSeparatorPathIsRejected() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val manager = ZipWorkspaceManager(context)
+        val output = ByteArrayOutputStream()
+        ZipOutputStream(output).use { zip ->
+            add(zip, "src//Main.kt", "ambiguous path")
+        }
+
+        val result = manager.extractZipToWorkspace(output.toByteArray().inputStream(), "ambiguous.zip")
+        assertTrue("Ambiguous normalized path must be rejected", result.isFailure)
+    }
+
     private fun versionZip(version: String, feature: String): java.io.InputStream {
         val output = ByteArrayOutputStream()
         ZipOutputStream(output).use { zip ->
