@@ -453,7 +453,7 @@ class ZipWorkspaceManager(private val context: Context) {
         // First include concise metadata for every candidate, independent of source excerpt budget.
         versions.forEach { version ->
             val summary = version.summary
-            output.append("\n### VERSION ${version.index}: ${version.id}\n")
+            output.append("\n### PROJECT VERSION ${version.index}: ${version.id}\n")
             output.append("Project type: ${summary.projectType}\n")
             output.append("Files: ${summary.totalFiles}; directories: ${summary.totalDirectories}; size: ${summary.totalSizeBytes} bytes\n")
             output.append("Key files: ${summary.keyFiles.take(10).joinToString(", ").ifBlank { "none detected" }}\n")
