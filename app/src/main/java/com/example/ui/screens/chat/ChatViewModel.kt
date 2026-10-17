@@ -371,6 +371,7 @@ class ChatViewModel(
         uri: Uri,
         reservedZipSlot: Boolean
     ) {
+        var processingZipAttachmentId: String? = null
         try {
             withContext(Dispatchers.IO) {
                 val contentResolver = appContext.contentResolver
@@ -399,6 +400,7 @@ class ChatViewModel(
                             }
                         }
                     } ?: return@withContext
+                    processingZipAttachmentId = zipAttachment.id
 
                     val stream = contentResolver.openInputStream(uri)
                         ?: throw java.io.IOException("Could not open $filename")
@@ -498,6 +500,13 @@ class ChatViewModel(
                 }
             }
         } catch (e: Exception) {
+            processingZipAttachmentId?.let { failedId ->
+                _attachments.value = _attachments.value.map { item ->
+                    if (item.id == failedId && item.status == AttachmentStatus.EXTRACTING) {
+                        item.copy(status = AttachmentStatus.ERROR, error = e.localizedMessage)
+                    } else item
+                }
+            }
             _errorMessage.value = "Could not attach file: ${e.localizedMessage}"
         }
     }
