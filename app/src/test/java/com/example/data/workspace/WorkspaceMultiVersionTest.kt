@@ -51,6 +51,34 @@ class WorkspaceMultiVersionTest {
     }
 
     @Test
+    fun deepContextIncludesManifestForAllTwentyCandidates() = runBlocking {
+        val manager = ZipWorkspaceManager(ApplicationProvider.getApplicationContext<Context>())
+        val versions = (1..20).map { index ->
+            manager.extractZipToWorkspace(
+                versionZip("candidate-$index", "feature-$index"),
+                "candidate-$index.zip"
+            ).getOrThrow()
+        }
+
+        val context = manager.buildDeepAnalysisContext(
+            workspaceIds = versions.map { it.workspaceId },
+            userQuery = "compare architecture and features",
+            maxChunksPerWorkspace = 4,
+            maxTotalChars = 12_000
+        )
+
+        versions.forEach { version ->
+            assertTrue(
+                "Every candidate must appear in the fair manifest: ${version.workspaceId}",
+                context.contains(version.workspaceId)
+            )
+        }
+        assertTrue(context.contains("Candidates requested: 20"))
+        assertTrue(context.contains("VERSION 20"))
+        assertTrue(context.length <= 12_000)
+    }
+
+    @Test
     fun zipSlipEntryIsRejectedAndPartialWorkspaceIsCleaned() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val manager = ZipWorkspaceManager(context)
