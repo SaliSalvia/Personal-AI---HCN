@@ -143,10 +143,13 @@ fun ChatScreen(
         uri?.let { viewModel.attachFileFromUri(context, it) }
     }
 
+    // Multi-select is the primary path for project labs: up to 20 ZIP versions can
+    // be queued in one operation. The ViewModel enforces the cap even if a picker
+    // returns more items than requested.
     val zipLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let { viewModel.attachFileFromUri(context, it) }
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) viewModel.attachZipFilesFromUris(context, uris)
     }
 
     // Jump to the newest entry when a message is added or generation starts.
@@ -376,7 +379,7 @@ fun ChatScreen(
                             onSelectPrompt = { prompt ->
                                 viewModel.onInputChanged(prompt)
                             },
-                            onUploadZip = { zipLauncher.launch("application/zip") }
+                            onUploadZip = { zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
                         )
                     } else {
                         LazyColumn(
