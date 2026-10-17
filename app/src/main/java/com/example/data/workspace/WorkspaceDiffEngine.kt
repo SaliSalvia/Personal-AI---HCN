@@ -3,6 +3,7 @@ package com.example.data.workspace
 import com.example.domain.model.WorkspaceFileChange
 import com.example.domain.model.WorkspaceVersionDiff
 import java.io.File
+import java.nio.file.Files
 import java.security.MessageDigest
 
 /**
@@ -77,6 +78,16 @@ class WorkspaceDiffEngine(
             .forEach { file ->
                 val relativePath = file.relativeTo(root).invariantSeparatorsPath
                 if (relativePath.split('/').any { it in ignoredDirectories }) return@forEach
+                // Imported workspaces should not contain symlinks, but refuse to hash
+                // a link or anything whose canonical target escapes the workspace root.
+                if (Files.isSymbolicLink(file.toPath())) {
+                    throw SecurityException("Symbolic links are not supported in workspace comparisons: $relativePath")
+                }
+                val canonicalRoot = root.canonicalFile.toPath()
+                val canonicalFile = file.canonicalFile.toPath()
+                if (!canonicalFile.startsWith(canonicalRoot)) {
+                    throw SecurityException("File escapes workspace root during comparison: $relativePath")
+                }
                 if (result.size >= maxFilesPerWorkspace) {
                     throw IllegalStateException("Workspace exceeds file comparison limit ($maxFilesPerWorkspace)")
                 }
@@ -95,7 +106,7 @@ class WorkspaceDiffEngine(
                 digest.update(buffer, 0, read)
             }
         }
-        return digest.digest().joinToString("") { "%02x".format(it) }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     private data class FileFingerprint(val sha256: String, val sizeBytes: Long)
