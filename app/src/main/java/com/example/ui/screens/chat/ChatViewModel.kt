@@ -347,9 +347,7 @@ class ChatViewModel(
                 val contentResolver = appContext.contentResolver
                 val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
                 val filename = getFileName(appContext, uri) ?: "attachment_${System.currentTimeMillis()}"
-                val isZip = filename.endsWith(".zip", ignoreCase = true) ||
-                    mimeType.contains("zip") ||
-                    (reservedZipSlot && mimeType == "application/octet-stream")
+                val isZip = filename.endsWith(".zip", ignoreCase = true) || mimeType.contains("zip")
 
                 if (isZip) {
                     val zipAttachment = synchronized(this@ChatViewModel) {
