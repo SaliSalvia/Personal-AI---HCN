@@ -549,6 +549,57 @@ class ChatViewModel(
         _attachments.value = _attachments.value.filterNot { it.id == id }
     }
 
+    /**
+     * Fills the composer with a reviewable stage prompt for a multi-version project lab.
+     * The user can edit the prompt before sending; this never modifies project files.
+     */
+    fun prepareProjectLabStage(stage: String) {
+        val versionCount = _attachments.value.count { it.isZipWorkspace && it.workspaceId != null }
+        if (versionCount < 2) {
+            _errorMessage.value = "Attach at least two successfully imported ZIP versions to start a Project Lab."
+            return
+        }
+        val candidateLine = "Analyze all $versionCount attached ZIP versions as separate candidates."
+        _inputText.value = when (stage) {
+            "inventory" -> """
+                PROJECT LAB — STAGE 1/6: EVIDENCE-BASED INVENTORY
+                $candidateLine
+                For every candidate, summarize project type, entry points, modules, architecture, build system, test coverage visible in the archive, important capabilities, and security-sensitive areas.
+                Cite exact relative file paths for every substantive claim. Label claims as OBSERVED, INFERRED, or UNKNOWN. Clearly state which files were actually inspected and which were not visible in the supplied context. Do not rank versions or propose merges yet.
+            """.trimIndent()
+            "compare" -> """
+                PROJECT LAB — STAGE 2/6: VERSION SCORECARD
+                $candidateLine
+                Compare candidates across correctness evidence, architecture, maintainability, security, tests, performance, usability, build/release readiness, and unique capabilities. Provide a weighted scorecard with reasons and exact file-path evidence. Separate confirmed regressions from differences in project direction. Never treat a file omitted from context as proof that a feature is absent. Call out uncertainty and conflicting evidence.
+            """.trimIndent()
+            "matrix" -> """
+                PROJECT LAB — STAGE 3/6: FEATURE AND COMPATIBILITY MATRIX
+                $candidateLine
+                Build a matrix of meaningful capabilities and identify which candidates contain each one. For each row, cite exact file paths and describe dependencies, interfaces, tests, and compatibility constraints. Mark each feature as verified, partially evidenced, or unverified. Identify duplicate implementations and incompatible assumptions without merging anything yet.
+            """.trimIndent()
+            "design" -> """
+                PROJECT LAB — STAGE 4/6: GOLDEN ARCHITECTURE
+                $candidateLine
+                Propose the best target architecture by combining compatible strengths while preserving the strongest verified baseline. Explain what to keep, adapt, reject, or investigate from each candidate, with path-level evidence. Identify API/data-model conflicts, migration risks, security boundaries, and decisions that need human approval. Do not claim any files have been changed.
+            """.trimIndent()
+            "plan" -> """
+                PROJECT LAB — STAGE 5/6: REVIEWABLE MERGE PLAN
+                $candidateLine
+                Produce an ordered, small-batch implementation plan. For each proposed patch list exact target files, source candidate and source paths, intended change, rationale, dependencies, tests, risk, rollback strategy, and acceptance criteria. Sequence foundational changes before dependent changes. Preserve all source archives and extracted candidates. Do not invent diffs or claim code has been edited.
+            """.trimIndent()
+            "validate" -> """
+                PROJECT LAB — STAGE 6/6: VALIDATION AND RELEASE GATE
+                $candidateLine
+                Create a validation matrix for the proposed golden version: unit tests, integration tests, build, security checks, performance, migrations, and release packaging. For each check give command or concrete manual procedure, expected result, evidence currently available, and status NOT RUN / PASS / FAIL / BLOCKED. Do not mark anything PASS without actual output. List blockers and the smallest next implementation batch.
+            """.trimIndent()
+            else -> {
+                _errorMessage.value = "Unknown Project Lab stage."
+                return
+            }
+        }
+        _errorMessage.value = null
+    }
+
     fun sendMessage() {
         val text = _inputText.value.trim()
         val currentAttach = _attachments.value
@@ -600,7 +651,9 @@ class ChatViewModel(
                     },
                     onCompleted = {
                         endStreaming()
-                        _attachments.value = emptyList()
+                        // Keep imported ZIP candidates attached so the user can run the
+                        // next Project Lab stage in the same conversation without re-uploading.
+                        _attachments.value = _attachments.value.filter { it.isZipWorkspace }
                     }
                 )
             } catch (e: CancellationException) {
