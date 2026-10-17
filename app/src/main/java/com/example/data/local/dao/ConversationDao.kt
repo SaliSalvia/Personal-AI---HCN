@@ -37,6 +37,9 @@ interface ConversationDao {
     @Query("UPDATE conversations SET draftPrompt = :draftPrompt WHERE id = :id")
     suspend fun updateDraftPrompt(id: String, draftPrompt: String?)
 
+    @Query("UPDATE conversations SET projectLabWorkspaceIds = :workspaceIds WHERE id = :id")
+    suspend fun updateProjectLabWorkspaceIds(id: String, workspaceIds: String?)
+
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteById(id: String)
 }
