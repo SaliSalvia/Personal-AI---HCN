@@ -5,6 +5,7 @@ import com.example.data.local.entity.WorkspaceEntity
 import com.example.data.workspace.ZipWorkspaceManager
 import com.example.domain.model.WorkspaceFileInfo
 import com.example.domain.model.WorkspaceSummary
+import com.example.domain.model.WorkspaceVersionDiff
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -58,6 +59,14 @@ class WorkspaceRepository(
         zipWorkspaceManager.deleteWorkspace(workspaceId)
         workspaceDao.deleteById(workspaceId)
     }
+
+    /** Returns an evidence-backed, content-hash diff for two imported versions. */
+    suspend fun compareWorkspaces(leftWorkspaceId: String, rightWorkspaceId: String): WorkspaceVersionDiff =
+        withContext(Dispatchers.IO) {
+            require(workspaceDao.getWorkspaceById(leftWorkspaceId) != null) { "Left workspace not found" }
+            require(workspaceDao.getWorkspaceById(rightWorkspaceId) != null) { "Right workspace not found" }
+            zipWorkspaceManager.compareWorkspaces(leftWorkspaceId, rightWorkspaceId)
+        }
 
     /** Creates a single archive containing the selected project versions. */
     suspend fun exportWorkspaces(workspaceIds: List<String>, archiveName: String): File = withContext(Dispatchers.IO) {
