@@ -558,7 +558,7 @@ class ChatViewModel(
             return
         }
         val candidateLine = "Analyze all $versionCount attached ZIP versions as separate candidates."
-        _inputText.value = when (stage) {
+        val prompt = when (stage) {
             "inventory" -> """
                 PROJECT LAB — STAGE 1/6: EVIDENCE-BASED INVENTORY
                 $candidateLine
@@ -595,6 +595,7 @@ class ChatViewModel(
                 return
             }
         }
+        onInputChanged(prompt)
         _errorMessage.value = null
     }
 
