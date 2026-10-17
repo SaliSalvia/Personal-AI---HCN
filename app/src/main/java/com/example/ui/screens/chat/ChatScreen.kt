@@ -504,7 +504,7 @@ fun ChatScreen(
                     selectedModelDisplay = selectedModelDisplay,
                     onOpenModelSelector = { showModelSheet = true },
                     onAttachFile = { genericFileLauncher.launch("*/*") },
-                    onAttachZip = { zipLauncher.launch("application/zip") },
+                    onAttachZip = { zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                     onSend = { viewModel.sendMessage() },
                     onStop = { viewModel.stopGeneration() },
                     hasAttachments = attachments.isNotEmpty()
