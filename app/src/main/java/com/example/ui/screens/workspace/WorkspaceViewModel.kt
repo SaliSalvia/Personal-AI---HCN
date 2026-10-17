@@ -10,7 +10,6 @@ import com.example.domain.model.WorkspaceVersionDiff
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.asStateFlow
 
 class WorkspaceViewModel(
     private val workspaceId: String,
