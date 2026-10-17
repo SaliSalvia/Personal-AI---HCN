@@ -6,9 +6,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.local.entity.WorkspaceEntity
 import com.example.data.repository.WorkspaceRepository
 import com.example.domain.model.WorkspaceFileInfo
+import com.example.domain.model.WorkspaceVersionDiff
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.asStateFlow
 
 class WorkspaceViewModel(
     private val workspaceId: String,
@@ -29,6 +31,37 @@ class WorkspaceViewModel(
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery = _searchQuery.asStateFlow()
+
+    val workspaces = workspaceRepository.allWorkspaces
+
+    private val _versionDiff = MutableStateFlow<WorkspaceVersionDiff?>(null)
+    val versionDiff = _versionDiff.asStateFlow()
+
+    private val _isComparingVersions = MutableStateFlow(false)
+    val isComparingVersions = _isComparingVersions.asStateFlow()
+
+    private val _comparisonError = MutableStateFlow<String?>(null)
+    val comparisonError = _comparisonError.asStateFlow()
+
+    fun compareVersions(leftWorkspaceId: String, rightWorkspaceId: String) {
+        if (leftWorkspaceId == rightWorkspaceId) {
+            _comparisonError.value = "Choose two different project versions."
+            _versionDiff.value = null
+            return
+        }
+        viewModelScope.launch {
+            _isComparingVersions.value = true
+            _comparisonError.value = null
+            _versionDiff.value = null
+            try {
+                _versionDiff.value = workspaceRepository.compareWorkspaces(leftWorkspaceId, rightWorkspaceId)
+            } catch (error: Exception) {
+                _comparisonError.value = error.message ?: "Could not compare these project versions."
+            } finally {
+                _isComparingVersions.value = false
+            }
+        }
+    }
 
     init {
         loadWorkspace()
