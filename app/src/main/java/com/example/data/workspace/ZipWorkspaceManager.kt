@@ -25,6 +25,7 @@ class ZipWorkspaceManager(private val context: Context) {
         private const val MAX_COMPRESSED_ARCHIVE_BYTES = 200 * 1024 * 1024L // 200 MB persisted upload cap
         private const val MAX_ENTRY_SIZE_BYTES = 25 * 1024 * 1024L // 25 MB max per file
         private const val MAX_ENTRIES_COUNT = 10_000
+        private const val MAX_COMPRESSION_RATIO = 1_000L
         private const val CHUNK_SIZE_CHARS = 3_000
 
         private val IGNORED_DIRECTORIES = setOf(
@@ -69,6 +70,9 @@ class ZipWorkspaceManager(private val context: Context) {
         val canonicalDestDirPath = destDir.canonicalPath + File.separator
         var totalBytesExtracted = 0L
         var totalEntries = 0
+        // ZIP archives may contain duplicate names that overwrite earlier entries.
+        // Track normalized names so extraction is deterministic and auditable.
+        val seenEntryNames = mutableSetOf<String>()
 
         try {
             val digest = MessageDigest.getInstance("SHA-256")
@@ -95,11 +99,29 @@ class ZipWorkspaceManager(private val context: Context) {
                         throw SecurityException("ZIP archive contains too many entries (exceeds $MAX_ENTRIES_COUNT)")
                     }
 
-                    val entryFile = File(destDir, entry.name)
+                    // Normalize both slash styles before validating. Reject absolute paths,
+                    // drive-prefixed paths, NULs, traversal segments, and duplicate entries.
+                    val normalizedName = entry.name.replace('\\', '/')
+                    val pathSegments = normalizedName.split('/')
+                    if (normalizedName.isBlank() ||
+                        normalizedName.startsWith('/') ||
+                        normalizedName.contains("//") ||
+                        Regex("^[A-Za-z]:").containsMatchIn(normalizedName) ||
+                        normalizedName.contains('\u0000') ||
+                        pathSegments.any { it == ".." || it == "." }
+                    ) {
+                        throw SecurityException("Unsafe ZIP entry path: '${entry.name}'")
+                    }
+                    val dedupeKey = normalizedName.trimEnd('/')
+                    if (!seenEntryNames.add(dedupeKey)) {
+                        throw SecurityException("ZIP contains duplicate or colliding entry path: '${entry.name}'")
+                    }
+
+                    val entryFile = File(destDir, normalizedName)
                     val canonicalEntryPath = entryFile.canonicalPath
 
-                    // CRITICAL ZIP SLIP / PATH TRAVERSAL CHECK
-                    if (!canonicalEntryPath.startsWith(canonicalDestDirPath) && canonicalEntryPath != destDir.canonicalPath) {
+                    // Defense in depth: verify the resolved destination remains inside the workspace.
+                    if (!canonicalEntryPath.startsWith(canonicalDestDirPath)) {
                         throw SecurityException("Zip Slip vulnerability detected: '${entry.name}' attempts directory traversal")
                     }
 
@@ -126,6 +148,17 @@ class ZipWorkspaceManager(private val context: Context) {
                                 output.write(buffer, 0, len)
                             }
                         }
+                    }
+
+                    // Some ZIP implementations expose compressedSize only after the entry
+                    // is fully consumed. Enforce a conservative ratio limit in addition to
+                    // absolute expanded-byte caps to flag ZIP-bomb-like payloads.
+                    val compressedSize = entry.compressedSize
+                    val expandedSize = entry.size
+                    if (compressedSize > 0L && expandedSize > 0L &&
+                        expandedSize / compressedSize.coerceAtLeast(1L) > MAX_COMPRESSION_RATIO
+                    ) {
+                        throw SecurityException("ZIP entry '${entry.name}' exceeds the allowed compression ratio")
                     }
 
                     zis.closeEntry()
@@ -448,6 +481,15 @@ class ZipWorkspaceManager(private val context: Context) {
 
     fun getStoredArchive(workspaceId: String): File? =
         File(archivesDir, "$workspaceId.zip").takeIf { it.isFile }
+
+    /** Compares two imported snapshots without mutating either original workspace. */
+    fun compareWorkspaces(leftWorkspaceId: String, rightWorkspaceId: String) =
+        WorkspaceDiffEngine().compare(
+            leftWorkspaceId = leftWorkspaceId,
+            leftRoot = File(workspacesDir, leftWorkspaceId),
+            rightWorkspaceId = rightWorkspaceId,
+            rightRoot = File(workspacesDir, rightWorkspaceId)
+        )
 
     private fun ByteArray.toHexString(): String = joinToString("") { byte -> "%02x".format(byte) }
 

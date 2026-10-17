@@ -34,6 +34,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -67,7 +70,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.local.entity.WorkspaceEntity
+import com.example.domain.model.WorkspaceFileChange
 import com.example.domain.model.WorkspaceFileInfo
+import com.example.domain.model.WorkspaceVersionDiff
 import com.example.ui.localization.LocalAppStrings
 import com.example.ui.screens.chat.components.CodeBlockView
 import com.example.ui.screens.chat.components.formatFileSize
@@ -100,6 +106,10 @@ fun WorkspaceScreen(
     val selectedFilePath by viewModel.selectedFilePath.collectAsState()
     val selectedFileContent by viewModel.selectedFileContent.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val workspaces by viewModel.workspaces.collectAsState(initial = emptyList())
+    val versionDiff by viewModel.versionDiff.collectAsState()
+    val isComparingVersions by viewModel.isComparingVersions.collectAsState()
+    val comparisonError by viewModel.comparisonError.collectAsState()
     val strings = LocalAppStrings.current
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
@@ -194,6 +204,11 @@ fun WorkspaceScreen(
                     onClick = { selectedTabIndex = 1 },
                     text = { Text(strings.projectAnalysis, fontSize = 14.sp) }
                 )
+                Tab(
+                    selected = selectedTabIndex == 2,
+                    onClick = { selectedTabIndex = 2 },
+                    text = { Text("Compare versions", fontSize = 13.sp) }
+                )
             }
 
             when (selectedTabIndex) {
@@ -211,6 +226,16 @@ fun WorkspaceScreen(
                         onStartChat = {
                             workspace?.id?.let { onOpenInChat(it) }
                         }
+                    )
+                }
+                2 -> {
+                    VersionComparisonTab(
+                        workspaces = workspaces,
+                        currentWorkspaceId = workspace?.id,
+                        diff = versionDiff,
+                        isComparing = isComparingVersions,
+                        error = comparisonError,
+                        onCompare = viewModel::compareVersions
                     )
                 }
             }
@@ -584,6 +609,196 @@ private fun AnalysisTabView(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(strings.chatWithWorkspace, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+@Composable
+private fun VersionComparisonTab(
+    workspaces: List<WorkspaceEntity>,
+    currentWorkspaceId: String?,
+    diff: WorkspaceVersionDiff?,
+    isComparing: Boolean,
+    error: String?,
+    onCompare: (String, String) -> Unit
+) {
+    var leftId by remember(workspaces, currentWorkspaceId) {
+        mutableStateOf(currentWorkspaceId ?: workspaces.firstOrNull()?.id.orEmpty())
+    }
+    var rightId by remember(workspaces, currentWorkspaceId) {
+        mutableStateOf(workspaces.firstOrNull { it.id != currentWorkspaceId }?.id
+            ?: workspaces.getOrNull(1)?.id.orEmpty())
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text(
+            text = "Compare imported project versions",
+            color = TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = "Deterministic SHA-256 comparison. Original ZIP archives and imported versions remain unchanged.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 17.sp
+        )
+
+        if (workspaces.size < 2) {
+            Text(
+                text = "Import at least two ZIP versions to compare them.",
+                color = IceCyanLight,
+                fontSize = 13.sp
+            )
+        } else {
+            WorkspaceVersionSelector(
+                label = "Version A / baseline",
+                workspaces = workspaces,
+                selectedId = leftId,
+                onSelected = { leftId = it }
+            )
+            WorkspaceVersionSelector(
+                label = "Version B / comparison",
+                workspaces = workspaces,
+                selectedId = rightId,
+                onSelected = { rightId = it }
+            )
+            Button(
+                onClick = { onCompare(leftId, rightId) },
+                enabled = !isComparing && leftId.isNotBlank() && rightId.isNotBlank() && leftId != rightId,
+                modifier = Modifier.fillMaxWidth().height(46.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = VioletPrimary),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                if (isComparing) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        color = Color.White,
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+                Text(if (isComparing) "Comparing files…" else "Compare versions")
+            }
+        }
+
+        if (!error.isNullOrBlank()) {
+            Text(text = error, color = ErrorRed, fontSize = 12.sp)
+        }
+
+        diff?.let { result ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                StatBox("Added", result.added.size.toString())
+                StatBox("Removed", result.removed.size.toString())
+                StatBox("Changed", result.changed.size.toString())
+                StatBox("Unchanged", result.unchangedCount.toString())
+            }
+            Text(
+                text = "Changed files are based on file-content SHA-256 hashes, not AI guesses or timestamps.",
+                color = TextSecondary,
+                fontSize = 11.sp
+            )
+            val changes = buildList {
+                result.added.forEach { add("ADDED" to it) }
+                result.removed.forEach { add("REMOVED" to it) }
+                result.changed.forEach { add("CHANGED" to it) }
+            }.sortedBy { it.second.relativePath }
+            if (changes.isEmpty()) {
+                Text("No content differences found.", color = IceCyanLight, fontSize = 13.sp)
+            } else {
+                changes.take(250).forEach { (kind, change) ->
+                    VersionChangeRow(kind, change)
+                }
+                if (changes.size > 250) {
+                    Text(
+                        text = "Showing 250 of ${changes.size} changed paths. Exportable full reports can be added next.",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceVersionSelector(
+    label: String,
+    workspaces: List<WorkspaceEntity>,
+    selectedId: String,
+    onSelected: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val selected = workspaces.firstOrNull { it.id == selectedId }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(label, color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Box {
+            OutlinedTextField(
+                value = selected?.name ?: "Select a project version",
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth().clickable { expanded = true },
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedBorderColor = IceCyan,
+                    unfocusedBorderColor = DarkBorder,
+                    focusedContainerColor = DarkSurface,
+                    unfocusedContainerColor = DarkSurface
+                )
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.background(DarkSurface)
+            ) {
+                workspaces.forEach { item ->
+                    DropdownMenuItem(
+                        text = { Text(item.name, color = TextPrimary, maxLines = 1) },
+                        onClick = {
+                            onSelected(item.id)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun VersionChangeRow(kind: String, change: WorkspaceFileChange) {
+    val tint = when (kind) {
+        "ADDED" -> IceCyanLight
+        "REMOVED" -> ErrorRed
+        else -> VioletLight
+    }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = DarkSurfaceVariant,
+        border = BorderStroke(1.dp, DarkBorder)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(kind, color = tint, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text(change.relativePath, color = TextPrimary, fontSize = 12.sp)
+            if (kind == "CHANGED") {
+                Text(
+                    text = "SHA-256: ${change.leftSha256?.take(10)} → ${change.rightSha256?.take(10)}",
+                    color = TextSecondary,
+                    fontSize = 10.sp
+                )
+            }
         }
     }
 }
