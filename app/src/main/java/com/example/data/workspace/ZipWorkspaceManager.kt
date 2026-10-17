@@ -101,12 +101,12 @@ class ZipWorkspaceManager(private val context: Context) {
 
                     // Normalize both slash styles before validating. Reject absolute paths,
                     // drive-prefixed paths, NULs, traversal segments, and duplicate entries.
-                    val normalizedName = entry.name.replace('\\\\', '/')
+                    val normalizedName = entry.name.replace('\\', '/')
                     val pathSegments = normalizedName.split('/')
                     if (normalizedName.isBlank() ||
                         normalizedName.startsWith('/') ||
                         Regex("^[A-Za-z]:").containsMatchIn(normalizedName) ||
-                        normalizedName.contains('\\u0000') ||
+                        normalizedName.contains('\u0000') ||
                         pathSegments.any { it == ".." || it == "." }
                     ) {
                         throw SecurityException("Unsafe ZIP entry path: '${entry.name}'")
