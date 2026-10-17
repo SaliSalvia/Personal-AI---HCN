@@ -658,13 +658,13 @@ private fun VersionComparisonTab(
             )
         } else {
             WorkspaceVersionSelector(
-                label = "Older / baseline version",
+                label = "Version A / baseline",
                 workspaces = workspaces,
                 selectedId = leftId,
                 onSelected = { leftId = it }
             )
             WorkspaceVersionSelector(
-                label = "Newer / comparison version",
+                label = "Version B / comparison",
                 workspaces = workspaces,
                 selectedId = rightId,
                 onSelected = { rightId = it }
