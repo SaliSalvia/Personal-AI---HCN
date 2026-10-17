@@ -51,6 +51,9 @@ class ChatViewModel(
         /** Cap for `word/document.xml`, which is unzipped straight into memory. */
         private const val MAX_DOCX_XML_BYTES = 4L * 1024 * 1024
 
+        /** Maximum number of ZIP project versions in one project lab. */
+        private const val MAX_PROJECT_VERSIONS = 20
+
         /** Attachments that are safe to read as UTF-8 text and send to the model. */
         private val TEXT_EXTENSIONS = setOf(
             "txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "tsv",
@@ -293,10 +296,6 @@ class ChatViewModel(
         viewModelScope.launch {
             modelRepository.toggleFavorite(model)
         }
-    }
-
-    private companion object {
-        const val MAX_PROJECT_VERSIONS = 20
     }
 
     // ZIP imports selected through the multi-picker are reserved before work starts,
