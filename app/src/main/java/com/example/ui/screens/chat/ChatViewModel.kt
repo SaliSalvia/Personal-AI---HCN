@@ -295,123 +295,175 @@ class ChatViewModel(
         }
     }
 
+    private companion object {
+        const val MAX_PROJECT_VERSIONS = 20
+    }
+
+    // ZIP imports selected through the multi-picker are reserved before work starts,
+    // so overlapping picker actions cannot queue more than the product limit.
+    private var pendingZipImports: Int = 0
+
     fun attachFileFromUri(context: Context, uri: Uri) {
         val appContext = context.applicationContext
         viewModelScope.launch {
+            processFileFromUri(appContext, uri, reservedZipSlot = false)
+        }
+    }
+
+    fun attachZipFilesFromUris(context: Context, uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val appContext = context.applicationContext
+        val uniqueUris = uris.distinct()
+        val currentZipCount = _attachments.value.count { it.isZipWorkspace }
+        val availableSlots = (MAX_PROJECT_VERSIONS - currentZipCount - pendingZipImports).coerceAtLeast(0)
+        val acceptedUris = uniqueUris.take(availableSlots)
+
+        if (acceptedUris.size < uniqueUris.size) {
+            _errorMessage.value =
+                "A project lab supports up to $MAX_PROJECT_VERSIONS ZIP versions. " +
+                "${acceptedUris.size} selected archive(s) accepted; remove existing ZIPs to add more."
+        }
+        if (acceptedUris.isEmpty()) return
+
+        pendingZipImports += acceptedUris.size
+        viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    val contentResolver = appContext.contentResolver
-                    val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
-                    val filename = getFileName(appContext, uri) ?: "attachment_${System.currentTimeMillis()}"
-                    val isZip = filename.endsWith(".zip", ignoreCase = true) || mimeType.contains("zip")
-
-                    if (isZip) {
-                        val zipAttachment = AttachmentItem(
-                            id = UUID.randomUUID().toString(),
-                            name = filename,
-                            mimeType = "application/zip",
-                            sizeBytes = querySize(appContext, uri) ?: 0L,
-                            isZipWorkspace = true,
-                            status = AttachmentStatus.EXTRACTING
-                        )
-                        _attachments.value = _attachments.value + zipAttachment
-
-                        val stream = contentResolver.openInputStream(uri)
-                            ?: throw java.io.IOException("Could not open $filename")
-
-                        // Stream the archive straight from the content provider. It used
-                        // to be read fully into a byte[] (and then wrapped in a second
-                        // in-memory stream), which doubled the peak memory of every upload.
-                        val result = stream.use {
-                            workspaceRepository.createWorkspaceFromZip(it, filename)
-                        }
-                        result.fold(
-                            onSuccess = { summary ->
-                                _activeWorkspaceId.value = summary.workspaceId
-                                _attachments.value = _attachments.value.map {
-                                    if (it.id == zipAttachment.id) {
-                                        it.copy(
-                                            workspaceId = summary.workspaceId,
-                                            status = AttachmentStatus.READY,
-                                            extractedText = summary.structureOverview
-                                        )
-                                    } else it
-                                }
-                            },
-                            onFailure = { err ->
-                                _attachments.value = _attachments.value.map {
-                                    if (it.id == zipAttachment.id) {
-                                        it.copy(status = AttachmentStatus.ERROR, error = err.message)
-                                    } else it
-                                }
-                                _errorMessage.value = "ZIP extraction failed: ${err.message}"
-                            }
-                        )
-                    } else if (mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || filename.endsWith(".docx", ignoreCase = true)) {
-                        val textContent = contentResolver.openInputStream(uri)?.use { extractDocxText(it) }
-                        _attachments.value = _attachments.value + AttachmentItem(
-                            id = UUID.randomUUID().toString(),
-                            name = filename,
-                            mimeType = mimeType,
-                            sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
-                            extractedText = textContent,
-                            status = AttachmentStatus.READY
-                        )
-                    } else if (mimeType == "application/pdf" || filename.endsWith(".pdf", ignoreCase = true)) {
-                        val result = sourceDocumentRepository.importPdf(
-                            uri = uri,
-                            displayName = filename,
-                            sizeBytes = querySize(appContext, uri) ?: 0L
-                        )
-                        result.fold(
-                            onSuccess = { source ->
-                                _attachments.value = _attachments.value + AttachmentItem(
-                                    id = source.id,
-                                    name = source.displayName,
-                                    mimeType = source.mimeType,
-                                    sizeBytes = source.sizeBytes,
-                                    extractedText = source.extractedTextPath?.let { File(it).readText(Charsets.UTF_8) },
-                                    status = AttachmentStatus.READY
-                                )
-                            },
-                            onFailure = { throw it }
-                        )
-                    } else if (!isTextLike(mimeType, filename)) {
-                        // Binary formats (xlsx, apk, images, …) would be decoded as
-                        // mojibake and then injected into the prompt as noise.
-                        _errorMessage.value =
-                            "Unsupported file type for $filename. Text, code, Markdown, PDF, DOCX and ZIP are supported."
-                    } else {
-                        // Regular text/code/doc attachment (capped so a huge file
-                        // cannot exhaust the heap of a low end device).
-                        val textContent = contentResolver.openInputStream(uri)?.use { input ->
-                            val out = java.io.ByteArrayOutputStream()
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            var total = 0L
-                            var read: Int
-                            while (input.read(buffer).also { read = it } != -1) {
-                                val usable = minOf(read.toLong(), MAX_TEXT_ATTACHMENT_BYTES - total).toInt()
-                                if (usable <= 0) break
-                                out.write(buffer, 0, usable)
-                                total += usable
-                            }
-                            String(out.toByteArray(), Charsets.UTF_8)
-                        }
-
-                        val item = AttachmentItem(
-                            id = UUID.randomUUID().toString(),
-                            name = filename,
-                            mimeType = mimeType,
-                            sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
-                            extractedText = textContent,
-                            status = AttachmentStatus.READY
-                        )
-                        _attachments.value = _attachments.value + item
-                    }
+                // Sequential extraction keeps peak disk/CPU pressure predictable on phones.
+                acceptedUris.forEach { uri ->
+                    processFileFromUri(appContext, uri, reservedZipSlot = true)
                 }
-            } catch (e: Exception) {
-                _errorMessage.value = "Could not attach file: ${e.localizedMessage}"
+            } finally {
+                pendingZipImports = (pendingZipImports - acceptedUris.size).coerceAtLeast(0)
             }
+        }
+    }
+
+    private suspend fun processFileFromUri(
+        appContext: Context,
+        uri: Uri,
+        reservedZipSlot: Boolean
+    ) {
+        try {
+            withContext(Dispatchers.IO) {
+                val contentResolver = appContext.contentResolver
+                val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+                val filename = getFileName(appContext, uri) ?: "attachment_${System.currentTimeMillis()}"
+                val isZip = filename.endsWith(".zip", ignoreCase = true) ||
+                    mimeType.contains("zip") ||
+                    (reservedZipSlot && mimeType == "application/octet-stream")
+
+                if (isZip) {
+                    val zipAttachment = synchronized(this@ChatViewModel) {
+                        val attachedZipCount = _attachments.value.count { it.isZipWorkspace }
+                        val reservedByOtherJobs = if (reservedZipSlot) 0 else pendingZipImports
+                        if (attachedZipCount + reservedByOtherJobs >= MAX_PROJECT_VERSIONS) {
+                            _errorMessage.value =
+                                "A project lab supports up to $MAX_PROJECT_VERSIONS ZIP versions. Remove a ZIP before adding another."
+                            null
+                        } else {
+                            AttachmentItem(
+                                id = UUID.randomUUID().toString(),
+                                name = filename,
+                                mimeType = "application/zip",
+                                sizeBytes = querySize(appContext, uri) ?: 0L,
+                                isZipWorkspace = true,
+                                status = AttachmentStatus.EXTRACTING
+                            ).also { item ->
+                                _attachments.value = _attachments.value + item
+                            }
+                        }
+                    } ?: return@withContext
+
+                    val stream = contentResolver.openInputStream(uri)
+                        ?: throw java.io.IOException("Could not open $filename")
+
+                    // Stream the archive directly; never load a full ZIP into memory.
+                    val result = stream.use {
+                        workspaceRepository.createWorkspaceFromZip(it, filename)
+                    }
+                    result.fold(
+                        onSuccess = { summary ->
+                            _attachments.value = _attachments.value.map {
+                                if (it.id == zipAttachment.id) {
+                                    it.copy(
+                                        workspaceId = summary.workspaceId,
+                                        status = AttachmentStatus.READY,
+                                        extractedText = summary.structureOverview
+                                    )
+                                } else it
+                            }
+                            _activeWorkspaceId.value = summary.workspaceId
+                        },
+                        onFailure = { err ->
+                            _attachments.value = _attachments.value.map {
+                                if (it.id == zipAttachment.id) {
+                                    it.copy(status = AttachmentStatus.ERROR, error = err.message)
+                                } else it
+                            }
+                            _errorMessage.value = "ZIP extraction failed for $filename: ${err.message}"
+                        }
+                    )
+                } else if (
+                    mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+                    filename.endsWith(".docx", ignoreCase = true)
+                ) {
+                    val textContent = contentResolver.openInputStream(uri)?.use { extractDocxText(it) }
+                    _attachments.value = _attachments.value + AttachmentItem(
+                        id = UUID.randomUUID().toString(),
+                        name = filename,
+                        mimeType = mimeType,
+                        sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
+                        extractedText = textContent,
+                        status = AttachmentStatus.READY
+                    )
+                } else if (mimeType == "application/pdf" || filename.endsWith(".pdf", ignoreCase = true)) {
+                    val result = sourceDocumentRepository.importPdf(
+                        uri = uri,
+                        displayName = filename,
+                        sizeBytes = querySize(appContext, uri) ?: 0L
+                    )
+                    result.fold(
+                        onSuccess = { source ->
+                            _attachments.value = _attachments.value + AttachmentItem(
+                                id = source.id,
+                                name = source.displayName,
+                                mimeType = source.mimeType,
+                                sizeBytes = source.sizeBytes,
+                                extractedText = source.extractedTextPath?.let { File(it).readText(Charsets.UTF_8) },
+                                status = AttachmentStatus.READY
+                            )
+                        },
+                        onFailure = { throw it }
+                    )
+                } else if (!isTextLike(mimeType, filename)) {
+                    _errorMessage.value =
+                        "Unsupported file type for $filename. Text, code, Markdown, PDF, DOCX and ZIP are supported."
+                } else {
+                    val textContent = contentResolver.openInputStream(uri)?.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0L
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            val usable = minOf(read.toLong(), MAX_TEXT_ATTACHMENT_BYTES - total).toInt()
+                            if (usable <= 0) break
+                            out.write(buffer, 0, usable)
+                            total += usable
+                        }
+                        String(out.toByteArray(), Charsets.UTF_8)
+                    }
+                    _attachments.value = _attachments.value + AttachmentItem(
+                        id = UUID.randomUUID().toString(),
+                        name = filename,
+                        mimeType = mimeType,
+                        sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
+                        extractedText = textContent,
+                        status = AttachmentStatus.READY
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            _errorMessage.value = "Could not attach file: ${e.localizedMessage}"
         }
     }
 
