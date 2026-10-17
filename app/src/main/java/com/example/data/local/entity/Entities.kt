@@ -14,7 +14,9 @@ data class ConversationEntity(
     val isPinned: Boolean = false,
     val workspaceId: String? = null,
     val selectedModel: String = "auto",
-    val draftPrompt: String? = null
+    val draftPrompt: String? = null,
+    /** Comma-separated workspace UUIDs attached to this persistent Project Lab conversation. */
+    val projectLabWorkspaceIds: String? = null
 )
 
 @Entity(
