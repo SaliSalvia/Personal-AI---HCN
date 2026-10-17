@@ -9,6 +9,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -47,6 +48,24 @@ class WorkspaceMultiVersionTest {
         assertTrue(deepContext.contains("PROJECT VERSION 2"))
         assertTrue(deepContext.contains("Main.kt"))
         assertTrue(deepContext.contains("DOCX evidence"))
+    }
+
+    @Test
+    fun zipSlipEntryIsRejectedAndPartialWorkspaceIsCleaned() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val manager = ZipWorkspaceManager(context)
+        val before = File(context.filesDir, "sali_workspaces").listFiles()?.size ?: 0
+        val output = ByteArrayOutputStream()
+        ZipOutputStream(output).use { zip ->
+            add(zip, "../escaped.txt", "must not escape workspace")
+        }
+
+        val result = manager.extractZipToWorkspace(output.toByteArray().inputStream(), "malicious.zip")
+
+        assertTrue("Path traversal archive must fail", result.isFailure)
+        val after = File(context.filesDir, "sali_workspaces").listFiles()?.size ?: 0
+        assertTrue("Failed import must not leave a partial workspace", after <= before)
+        assertTrue("No file may be written outside the workspace", !File(context.filesDir, "escaped.txt").exists())
     }
 
     private fun versionZip(version: String, feature: String): java.io.InputStream {
