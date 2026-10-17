@@ -222,15 +222,44 @@ class ChatViewModel(
 
     fun loadConversation(conversationId: String) {
         _currentConversationId.value = conversationId
+        _attachments.value = emptyList()
         _errorMessage.value = null
         // The agent trace belongs to a single run; without this the previous
         // conversation's steps were still rendered after switching chats.
         chatRepository.clearTrace()
         messagesObservationJob?.cancel()
         messagesObservationJob = viewModelScope.launch {
-            // Restore draft text if available
+            // Restore draft text and selected ZIP candidates for a resumable Project Lab.
             val conv = chatRepository.getConversation(conversationId)
             _inputText.value = conv?.draftPrompt ?: ""
+            val savedWorkspaceIds = conv?.projectLabWorkspaceIds
+                ?.split(',')
+                ?.filter { it.isNotBlank() }
+                ?.distinct()
+                ?.take(MAX_PROJECT_VERSIONS)
+                .orEmpty()
+            val restoredAttachments = savedWorkspaceIds.mapNotNull { id ->
+                workspaceRepository.getWorkspace(id)?.let { workspace ->
+                    AttachmentItem(
+                        id = workspace.id,
+                        name = workspace.name,
+                        mimeType = "application/zip",
+                        sizeBytes = workspace.totalSizeBytes,
+                        extractedText = workspace.summary,
+                        status = AttachmentStatus.READY,
+                        isZipWorkspace = true,
+                        workspaceId = workspace.id
+                    )
+                }
+            }
+            _attachments.value = restoredAttachments
+            _activeWorkspaceId.value = restoredAttachments.lastOrNull()?.workspaceId
+            if (restoredAttachments.size != savedWorkspaceIds.size) {
+                chatRepository.saveProjectLabWorkspaceIds(
+                    conversationId,
+                    restoredAttachments.mapNotNull { it.workspaceId }
+                )
+            }
 
             chatRepository.getMessages(conversationId).collect { list ->
                 _messages.value = list
@@ -400,6 +429,15 @@ class ChatViewModel(
                             _errorMessage.value = "ZIP extraction failed for $filename: ${err.message}"
                         }
                     )
+                    if (result.isSuccess) {
+                        val conversationId = _currentConversationId.value
+                        if (conversationId != null) {
+                            chatRepository.saveProjectLabWorkspaceIds(
+                                conversationId,
+                                _attachments.value.mapNotNull { it.workspaceId }.distinct().take(MAX_PROJECT_VERSIONS)
+                            )
+                        }
+                    }
                 } else if (
                     mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
                     filename.endsWith(".docx", ignoreCase = true)
@@ -544,7 +582,16 @@ class ChatViewModel(
     }
 
     fun removeAttachment(id: String) {
-        _attachments.value = _attachments.value.filterNot { it.id == id }
+        val removed = _attachments.value.firstOrNull { it.id == id }
+        val updated = _attachments.value.filterNot { it.id == id }
+        _attachments.value = updated
+        if (removed?.isZipWorkspace == true) {
+            val conversationId = _currentConversationId.value ?: return
+            val workspaceIds = updated.mapNotNull { it.workspaceId }.distinct().take(MAX_PROJECT_VERSIONS)
+            viewModelScope.launch {
+                chatRepository.saveProjectLabWorkspaceIds(conversationId, workspaceIds)
+            }
+        }
     }
 
     /**
