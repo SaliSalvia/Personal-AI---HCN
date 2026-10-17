@@ -55,7 +55,7 @@ class WorkspaceMultiVersionTest {
         val manager = ZipWorkspaceManager(ApplicationProvider.getApplicationContext<Context>())
         val versions = (1..20).map { index ->
             manager.extractZipToWorkspace(
-                versionZip("candidate-$index", "feature-$index"),
+                smallVersionZip(index),
                 "candidate-$index.zip"
             ).getOrThrow()
         }
@@ -107,6 +107,15 @@ class WorkspaceMultiVersionTest {
 
         val result = manager.extractZipToWorkspace(output.toByteArray().inputStream(), "ambiguous.zip")
         assertTrue("Ambiguous normalized path must be rejected", result.isFailure)
+    }
+
+    private fun smallVersionZip(index: Int): java.io.InputStream {
+        val output = ByteArrayOutputStream()
+        ZipOutputStream(output).use { zip ->
+            add(zip, "README.md", "Candidate $index architecture notes")
+            add(zip, "src/Main.kt", "fun candidate$index() = \"feature-$index\"")
+        }
+        return output.toByteArray().inputStream()
     }
 
     private fun versionZip(version: String, feature: String): java.io.InputStream {
