@@ -105,6 +105,7 @@ class ZipWorkspaceManager(private val context: Context) {
                     val pathSegments = normalizedName.split('/')
                     if (normalizedName.isBlank() ||
                         normalizedName.startsWith('/') ||
+                        normalizedName.contains("//") ||
                         Regex("^[A-Za-z]:").containsMatchIn(normalizedName) ||
                         normalizedName.contains('\u0000') ||
                         pathSegments.any { it == ".." || it == "." }
