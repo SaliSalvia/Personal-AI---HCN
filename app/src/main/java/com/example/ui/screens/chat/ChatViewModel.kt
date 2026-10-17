@@ -300,7 +300,7 @@ class ChatViewModel(
 
     // ZIP imports selected through the multi-picker are reserved before work starts,
     // so overlapping picker actions cannot queue more than the product limit.
-    private var pendingZipImports: Int = 0
+    @Volatile private var pendingZipImports: Int = 0
 
     fun attachFileFromUri(context: Context, uri: Uri) {
         val appContext = context.applicationContext
