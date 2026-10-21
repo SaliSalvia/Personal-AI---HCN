@@ -51,6 +51,34 @@ class WorkspaceMultiVersionTest {
     }
 
     @Test
+    fun deepContextIncludesManifestForAllTwentyCandidates() = runBlocking {
+        val manager = ZipWorkspaceManager(ApplicationProvider.getApplicationContext<Context>())
+        val versions = (1..20).map { index ->
+            manager.extractZipToWorkspace(
+                smallVersionZip(index),
+                "candidate-$index.zip"
+            ).getOrThrow()
+        }
+
+        val context = manager.buildDeepAnalysisContext(
+            workspaceIds = versions.map { it.workspaceId },
+            userQuery = "compare architecture and features",
+            maxChunksPerWorkspace = 4,
+            maxTotalChars = 12_000
+        )
+
+        versions.forEach { version ->
+            assertTrue(
+                "Every candidate must appear in the fair manifest: ${version.workspaceId}",
+                context.contains(version.workspaceId)
+            )
+        }
+        assertTrue(context.contains("Candidates requested: 20"))
+        assertTrue(context.contains("VERSION 20"))
+        assertTrue(context.length <= 12_000)
+    }
+
+    @Test
     fun zipSlipEntryIsRejectedAndPartialWorkspaceIsCleaned() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val manager = ZipWorkspaceManager(context)
@@ -79,6 +107,15 @@ class WorkspaceMultiVersionTest {
 
         val result = manager.extractZipToWorkspace(output.toByteArray().inputStream(), "ambiguous.zip")
         assertTrue("Ambiguous normalized path must be rejected", result.isFailure)
+    }
+
+    private fun smallVersionZip(index: Int): java.io.InputStream {
+        val output = ByteArrayOutputStream()
+        ZipOutputStream(output).use { zip ->
+            add(zip, "README.md", "Candidate $index architecture notes")
+            add(zip, "src/Main.kt", "fun candidate$index() = \"feature-$index\"")
+        }
+        return output.toByteArray().inputStream()
     }
 
     private fun versionZip(version: String, feature: String): java.io.InputStream {

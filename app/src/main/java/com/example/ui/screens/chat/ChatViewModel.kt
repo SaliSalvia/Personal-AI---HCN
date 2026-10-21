@@ -51,6 +51,9 @@ class ChatViewModel(
         /** Cap for `word/document.xml`, which is unzipped straight into memory. */
         private const val MAX_DOCX_XML_BYTES = 4L * 1024 * 1024
 
+        /** Maximum number of ZIP project versions in one project lab. */
+        private const val MAX_PROJECT_VERSIONS = 20
+
         /** Attachments that are safe to read as UTF-8 text and send to the model. */
         private val TEXT_EXTENSIONS = setOf(
             "txt", "md", "markdown", "json", "xml", "yaml", "yml", "csv", "tsv",
@@ -219,15 +222,44 @@ class ChatViewModel(
 
     fun loadConversation(conversationId: String) {
         _currentConversationId.value = conversationId
+        _attachments.value = emptyList()
         _errorMessage.value = null
         // The agent trace belongs to a single run; without this the previous
         // conversation's steps were still rendered after switching chats.
         chatRepository.clearTrace()
         messagesObservationJob?.cancel()
         messagesObservationJob = viewModelScope.launch {
-            // Restore draft text if available
+            // Restore draft text and selected ZIP candidates for a resumable Project Lab.
             val conv = chatRepository.getConversation(conversationId)
             _inputText.value = conv?.draftPrompt ?: ""
+            val savedWorkspaceIds = conv?.projectLabWorkspaceIds
+                ?.split(',')
+                ?.filter { it.isNotBlank() }
+                ?.distinct()
+                ?.take(MAX_PROJECT_VERSIONS)
+                .orEmpty()
+            val restoredAttachments = savedWorkspaceIds.mapNotNull { id ->
+                workspaceRepository.getWorkspace(id)?.let { workspace ->
+                    AttachmentItem(
+                        id = workspace.id,
+                        name = workspace.name,
+                        mimeType = "application/zip",
+                        sizeBytes = workspace.totalSizeBytes,
+                        extractedText = workspace.summary,
+                        status = AttachmentStatus.READY,
+                        isZipWorkspace = true,
+                        workspaceId = workspace.id
+                    )
+                }
+            }
+            _attachments.value = restoredAttachments
+            _activeWorkspaceId.value = restoredAttachments.lastOrNull()?.workspaceId ?: conv?.workspaceId
+            if (restoredAttachments.size != savedWorkspaceIds.size) {
+                chatRepository.saveProjectLabWorkspaceIds(
+                    conversationId,
+                    restoredAttachments.mapNotNull { it.workspaceId }
+                )
+            }
 
             chatRepository.getMessages(conversationId).collect { list ->
                 _messages.value = list
@@ -295,123 +327,187 @@ class ChatViewModel(
         }
     }
 
+    // ZIP imports selected through the multi-picker are reserved before work starts,
+    // so overlapping picker actions cannot queue more than the product limit.
+    @Volatile private var pendingZipImports: Int = 0
+
     fun attachFileFromUri(context: Context, uri: Uri) {
         val appContext = context.applicationContext
         viewModelScope.launch {
+            processFileFromUri(appContext, uri, reservedZipSlot = false)
+        }
+    }
+
+    fun attachZipFilesFromUris(context: Context, uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        val appContext = context.applicationContext
+        val uniqueUris = uris.distinct()
+        val currentZipCount = _attachments.value.count { it.isZipWorkspace }
+        val availableSlots = (MAX_PROJECT_VERSIONS - currentZipCount - pendingZipImports).coerceAtLeast(0)
+        val acceptedUris = uniqueUris.take(availableSlots)
+
+        if (acceptedUris.size < uniqueUris.size) {
+            _errorMessage.value =
+                "A project lab supports up to $MAX_PROJECT_VERSIONS ZIP versions. " +
+                "${acceptedUris.size} selected archive(s) accepted; remove existing ZIPs to add more."
+        }
+        if (acceptedUris.isEmpty()) return
+
+        pendingZipImports += acceptedUris.size
+        viewModelScope.launch {
             try {
-                withContext(Dispatchers.IO) {
-                    val contentResolver = appContext.contentResolver
-                    val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
-                    val filename = getFileName(appContext, uri) ?: "attachment_${System.currentTimeMillis()}"
-                    val isZip = filename.endsWith(".zip", ignoreCase = true) || mimeType.contains("zip")
-
-                    if (isZip) {
-                        val zipAttachment = AttachmentItem(
-                            id = UUID.randomUUID().toString(),
-                            name = filename,
-                            mimeType = "application/zip",
-                            sizeBytes = querySize(appContext, uri) ?: 0L,
-                            isZipWorkspace = true,
-                            status = AttachmentStatus.EXTRACTING
-                        )
-                        _attachments.value = _attachments.value + zipAttachment
-
-                        val stream = contentResolver.openInputStream(uri)
-                            ?: throw java.io.IOException("Could not open $filename")
-
-                        // Stream the archive straight from the content provider. It used
-                        // to be read fully into a byte[] (and then wrapped in a second
-                        // in-memory stream), which doubled the peak memory of every upload.
-                        val result = stream.use {
-                            workspaceRepository.createWorkspaceFromZip(it, filename)
-                        }
-                        result.fold(
-                            onSuccess = { summary ->
-                                _activeWorkspaceId.value = summary.workspaceId
-                                _attachments.value = _attachments.value.map {
-                                    if (it.id == zipAttachment.id) {
-                                        it.copy(
-                                            workspaceId = summary.workspaceId,
-                                            status = AttachmentStatus.READY,
-                                            extractedText = summary.structureOverview
-                                        )
-                                    } else it
-                                }
-                            },
-                            onFailure = { err ->
-                                _attachments.value = _attachments.value.map {
-                                    if (it.id == zipAttachment.id) {
-                                        it.copy(status = AttachmentStatus.ERROR, error = err.message)
-                                    } else it
-                                }
-                                _errorMessage.value = "ZIP extraction failed: ${err.message}"
-                            }
-                        )
-                    } else if (mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || filename.endsWith(".docx", ignoreCase = true)) {
-                        val textContent = contentResolver.openInputStream(uri)?.use { extractDocxText(it) }
-                        _attachments.value = _attachments.value + AttachmentItem(
-                            id = UUID.randomUUID().toString(),
-                            name = filename,
-                            mimeType = mimeType,
-                            sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
-                            extractedText = textContent,
-                            status = AttachmentStatus.READY
-                        )
-                    } else if (mimeType == "application/pdf" || filename.endsWith(".pdf", ignoreCase = true)) {
-                        val result = sourceDocumentRepository.importPdf(
-                            uri = uri,
-                            displayName = filename,
-                            sizeBytes = querySize(appContext, uri) ?: 0L
-                        )
-                        result.fold(
-                            onSuccess = { source ->
-                                _attachments.value = _attachments.value + AttachmentItem(
-                                    id = source.id,
-                                    name = source.displayName,
-                                    mimeType = source.mimeType,
-                                    sizeBytes = source.sizeBytes,
-                                    extractedText = source.extractedTextPath?.let { File(it).readText(Charsets.UTF_8) },
-                                    status = AttachmentStatus.READY
-                                )
-                            },
-                            onFailure = { throw it }
-                        )
-                    } else if (!isTextLike(mimeType, filename)) {
-                        // Binary formats (xlsx, apk, images, …) would be decoded as
-                        // mojibake and then injected into the prompt as noise.
-                        _errorMessage.value =
-                            "Unsupported file type for $filename. Text, code, Markdown, PDF, DOCX and ZIP are supported."
-                    } else {
-                        // Regular text/code/doc attachment (capped so a huge file
-                        // cannot exhaust the heap of a low end device).
-                        val textContent = contentResolver.openInputStream(uri)?.use { input ->
-                            val out = java.io.ByteArrayOutputStream()
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            var total = 0L
-                            var read: Int
-                            while (input.read(buffer).also { read = it } != -1) {
-                                val usable = minOf(read.toLong(), MAX_TEXT_ATTACHMENT_BYTES - total).toInt()
-                                if (usable <= 0) break
-                                out.write(buffer, 0, usable)
-                                total += usable
-                            }
-                            String(out.toByteArray(), Charsets.UTF_8)
-                        }
-
-                        val item = AttachmentItem(
-                            id = UUID.randomUUID().toString(),
-                            name = filename,
-                            mimeType = mimeType,
-                            sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
-                            extractedText = textContent,
-                            status = AttachmentStatus.READY
-                        )
-                        _attachments.value = _attachments.value + item
-                    }
+                // Sequential extraction keeps peak disk/CPU pressure predictable on phones.
+                acceptedUris.forEach { uri ->
+                    processFileFromUri(appContext, uri, reservedZipSlot = true)
                 }
-            } catch (e: Exception) {
-                _errorMessage.value = "Could not attach file: ${e.localizedMessage}"
+            } finally {
+                pendingZipImports = (pendingZipImports - acceptedUris.size).coerceAtLeast(0)
             }
+        }
+    }
+
+    private suspend fun processFileFromUri(
+        appContext: Context,
+        uri: Uri,
+        reservedZipSlot: Boolean
+    ) {
+        var processingZipAttachmentId: String? = null
+        try {
+            withContext(Dispatchers.IO) {
+                val contentResolver = appContext.contentResolver
+                val mimeType = contentResolver.getType(uri) ?: "application/octet-stream"
+                val filename = getFileName(appContext, uri) ?: "attachment_${System.currentTimeMillis()}"
+                val isZip = filename.endsWith(".zip", ignoreCase = true) || mimeType.contains("zip")
+
+                if (isZip) {
+                    val zipAttachment = synchronized(this@ChatViewModel) {
+                        val attachedZipCount = _attachments.value.count { it.isZipWorkspace }
+                        val reservedByOtherJobs = if (reservedZipSlot) 0 else pendingZipImports
+                        if (attachedZipCount + reservedByOtherJobs >= MAX_PROJECT_VERSIONS) {
+                            _errorMessage.value =
+                                "A project lab supports up to $MAX_PROJECT_VERSIONS ZIP versions. Remove a ZIP before adding another."
+                            null
+                        } else {
+                            AttachmentItem(
+                                id = UUID.randomUUID().toString(),
+                                name = filename,
+                                mimeType = "application/zip",
+                                sizeBytes = querySize(appContext, uri) ?: 0L,
+                                isZipWorkspace = true,
+                                status = AttachmentStatus.EXTRACTING
+                            ).also { item ->
+                                _attachments.value = _attachments.value + item
+                            }
+                        }
+                    } ?: return@withContext
+                    processingZipAttachmentId = zipAttachment.id
+
+                    val stream = contentResolver.openInputStream(uri)
+                        ?: throw java.io.IOException("Could not open $filename")
+
+                    // Stream the archive directly; never load a full ZIP into memory.
+                    val result = stream.use {
+                        workspaceRepository.createWorkspaceFromZip(it, filename)
+                    }
+                    result.fold(
+                        onSuccess = { summary ->
+                            _attachments.value = _attachments.value.map {
+                                if (it.id == zipAttachment.id) {
+                                    it.copy(
+                                        workspaceId = summary.workspaceId,
+                                        status = AttachmentStatus.READY,
+                                        extractedText = summary.structureOverview
+                                    )
+                                } else it
+                            }
+                            _activeWorkspaceId.value = summary.workspaceId
+                        },
+                        onFailure = { err ->
+                            _attachments.value = _attachments.value.map {
+                                if (it.id == zipAttachment.id) {
+                                    it.copy(status = AttachmentStatus.ERROR, error = err.message)
+                                } else it
+                            }
+                            _errorMessage.value = "ZIP extraction failed for $filename: ${err.message}"
+                        }
+                    )
+                    if (result.isSuccess) {
+                        val conversationId = _currentConversationId.value
+                        if (conversationId != null) {
+                            chatRepository.saveProjectLabWorkspaceIds(
+                                conversationId,
+                                _attachments.value.mapNotNull { it.workspaceId }.distinct().take(MAX_PROJECT_VERSIONS)
+                            )
+                        }
+                    }
+                } else if (
+                    mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+                    filename.endsWith(".docx", ignoreCase = true)
+                ) {
+                    val textContent = contentResolver.openInputStream(uri)?.use { extractDocxText(it) }
+                    _attachments.value = _attachments.value + AttachmentItem(
+                        id = UUID.randomUUID().toString(),
+                        name = filename,
+                        mimeType = mimeType,
+                        sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
+                        extractedText = textContent,
+                        status = AttachmentStatus.READY
+                    )
+                } else if (mimeType == "application/pdf" || filename.endsWith(".pdf", ignoreCase = true)) {
+                    val result = sourceDocumentRepository.importPdf(
+                        uri = uri,
+                        displayName = filename,
+                        sizeBytes = querySize(appContext, uri) ?: 0L
+                    )
+                    result.fold(
+                        onSuccess = { source ->
+                            _attachments.value = _attachments.value + AttachmentItem(
+                                id = source.id,
+                                name = source.displayName,
+                                mimeType = source.mimeType,
+                                sizeBytes = source.sizeBytes,
+                                extractedText = source.extractedTextPath?.let { File(it).readText(Charsets.UTF_8) },
+                                status = AttachmentStatus.READY
+                            )
+                        },
+                        onFailure = { throw it }
+                    )
+                } else if (!isTextLike(mimeType, filename)) {
+                    _errorMessage.value =
+                        "Unsupported file type for $filename. Text, code, Markdown, PDF, DOCX and ZIP are supported."
+                } else {
+                    val textContent = contentResolver.openInputStream(uri)?.use { input ->
+                        val out = java.io.ByteArrayOutputStream()
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        var total = 0L
+                        var read: Int
+                        while (input.read(buffer).also { read = it } != -1) {
+                            val usable = minOf(read.toLong(), MAX_TEXT_ATTACHMENT_BYTES - total).toInt()
+                            if (usable <= 0) break
+                            out.write(buffer, 0, usable)
+                            total += usable
+                        }
+                        String(out.toByteArray(), Charsets.UTF_8)
+                    }
+                    _attachments.value = _attachments.value + AttachmentItem(
+                        id = UUID.randomUUID().toString(),
+                        name = filename,
+                        mimeType = mimeType,
+                        sizeBytes = querySize(appContext, uri) ?: textContent?.length?.toLong() ?: 0L,
+                        extractedText = textContent,
+                        status = AttachmentStatus.READY
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            processingZipAttachmentId?.let { failedId ->
+                _attachments.value = _attachments.value.map { item ->
+                    if (item.id == failedId && item.status == AttachmentStatus.EXTRACTING) {
+                        item.copy(status = AttachmentStatus.ERROR, error = e.localizedMessage)
+                    } else item
+                }
+            }
+            _errorMessage.value = "Could not attach file: ${e.localizedMessage}"
         }
     }
 
@@ -495,7 +591,68 @@ class ChatViewModel(
     }
 
     fun removeAttachment(id: String) {
-        _attachments.value = _attachments.value.filterNot { it.id == id }
+        val removed = _attachments.value.firstOrNull { it.id == id }
+        val updated = _attachments.value.filterNot { it.id == id }
+        _attachments.value = updated
+        if (removed?.isZipWorkspace == true) {
+            val conversationId = _currentConversationId.value ?: return
+            val workspaceIds = updated.mapNotNull { it.workspaceId }.distinct().take(MAX_PROJECT_VERSIONS)
+            viewModelScope.launch {
+                chatRepository.saveProjectLabWorkspaceIds(conversationId, workspaceIds)
+            }
+        }
+    }
+
+    /**
+     * Fills the composer with a reviewable stage prompt for a multi-version project lab.
+     * The user can edit the prompt before sending; this never modifies project files.
+     */
+    fun prepareProjectLabStage(stage: String) {
+        val versionCount = _attachments.value.count { it.isZipWorkspace && it.workspaceId != null }
+        if (versionCount < 2) {
+            _errorMessage.value = "Attach at least two successfully imported ZIP versions to start a Project Lab."
+            return
+        }
+        val candidateLine = "Analyze all $versionCount attached ZIP versions as separate candidates."
+        val prompt = when (stage) {
+            "inventory" -> """
+                PROJECT LAB — STAGE 1/6: EVIDENCE-BASED INVENTORY
+                $candidateLine
+                For every candidate, summarize project type, entry points, modules, architecture, build system, test coverage visible in the archive, important capabilities, and security-sensitive areas.
+                Cite exact relative file paths for every substantive claim. Label claims as OBSERVED, INFERRED, or UNKNOWN. Clearly state which files were actually inspected and which were not visible in the supplied context. Do not rank versions or propose merges yet.
+            """.trimIndent()
+            "compare" -> """
+                PROJECT LAB — STAGE 2/6: VERSION SCORECARD
+                $candidateLine
+                Compare candidates across correctness evidence, architecture, maintainability, security, tests, performance, usability, build/release readiness, and unique capabilities. Provide a weighted scorecard with reasons and exact file-path evidence. Separate confirmed regressions from differences in project direction. Never treat a file omitted from context as proof that a feature is absent. Call out uncertainty and conflicting evidence.
+            """.trimIndent()
+            "matrix" -> """
+                PROJECT LAB — STAGE 3/6: FEATURE AND COMPATIBILITY MATRIX
+                $candidateLine
+                Build a matrix of meaningful capabilities and identify which candidates contain each one. For each row, cite exact file paths and describe dependencies, interfaces, tests, and compatibility constraints. Mark each feature as verified, partially evidenced, or unverified. Identify duplicate implementations and incompatible assumptions without merging anything yet.
+            """.trimIndent()
+            "design" -> """
+                PROJECT LAB — STAGE 4/6: GOLDEN ARCHITECTURE
+                $candidateLine
+                Propose the best target architecture by combining compatible strengths while preserving the strongest verified baseline. Explain what to keep, adapt, reject, or investigate from each candidate, with path-level evidence. Identify API/data-model conflicts, migration risks, security boundaries, and decisions that need human approval. Do not claim any files have been changed.
+            """.trimIndent()
+            "plan" -> """
+                PROJECT LAB — STAGE 5/6: REVIEWABLE MERGE PLAN
+                $candidateLine
+                Produce an ordered, small-batch implementation plan. For each proposed patch list exact target files, source candidate and source paths, intended change, rationale, dependencies, tests, risk, rollback strategy, and acceptance criteria. Sequence foundational changes before dependent changes. Preserve all source archives and extracted candidates. Do not invent diffs or claim code has been edited.
+            """.trimIndent()
+            "validate" -> """
+                PROJECT LAB — STAGE 6/6: VALIDATION AND RELEASE GATE
+                $candidateLine
+                Create a validation matrix for the proposed golden version: unit tests, integration tests, build, security checks, performance, migrations, and release packaging. For each check give command or concrete manual procedure, expected result, evidence currently available, and status NOT RUN / PASS / FAIL / BLOCKED. Do not mark anything PASS without actual output. List blockers and the smallest next implementation batch.
+            """.trimIndent()
+            else -> {
+                _errorMessage.value = "Unknown Project Lab stage."
+                return
+            }
+        }
+        onInputChanged(prompt)
+        _errorMessage.value = null
     }
 
     fun sendMessage() {
@@ -549,7 +706,9 @@ class ChatViewModel(
                     },
                     onCompleted = {
                         endStreaming()
-                        _attachments.value = emptyList()
+                        // Keep imported ZIP candidates attached so the user can run the
+                        // next Project Lab stage in the same conversation without re-uploading.
+                        _attachments.value = _attachments.value.filter { it.isZipWorkspace }
                     }
                 )
             } catch (e: CancellationException) {

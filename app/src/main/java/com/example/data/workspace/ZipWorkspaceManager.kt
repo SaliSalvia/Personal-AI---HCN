@@ -23,6 +23,8 @@ class ZipWorkspaceManager(private val context: Context) {
     companion object {
         private const val MAX_TOTAL_UNCOMPRESSED_BYTES = 150 * 1024 * 1024L // 150 MB safety cap
         private const val MAX_COMPRESSED_ARCHIVE_BYTES = 200 * 1024 * 1024L // 200 MB persisted upload cap
+        // Protect phones from a 20-archive lab exhausting internal storage.
+        private const val MAX_TOTAL_PROJECT_LAB_BYTES = 1024L * 1024L * 1024L // 1 GiB including originals
         private const val MAX_ENTRY_SIZE_BYTES = 25 * 1024 * 1024L // 25 MB max per file
         private const val MAX_ENTRIES_COUNT = 10_000
         private const val MAX_COMPRESSION_RATIO = 1_000L
@@ -68,8 +70,10 @@ class ZipWorkspaceManager(private val context: Context) {
         }
 
         val canonicalDestDirPath = destDir.canonicalPath + File.separator
+        val existingStoredBytes = calculateStoredProjectBytes(excludingWorkspaceId = workspaceId)
         var totalBytesExtracted = 0L
         var totalEntries = 0
+        var archiveBytes = 0L
         // ZIP archives may contain duplicate names that overwrite earlier entries.
         // Track normalized names so extraction is deterministic and auditable.
         val seenEntryNames = mutableSetOf<String>()
@@ -79,11 +83,13 @@ class ZipWorkspaceManager(private val context: Context) {
             archiveFile.outputStream().buffered().use { output ->
                 val buffer = ByteArray(8192)
                 var read: Int
-                var archiveBytes = 0L
                 while (inputStream.read(buffer).also { read = it } != -1) {
                     archiveBytes += read
                     if (archiveBytes > MAX_COMPRESSED_ARCHIVE_BYTES) {
                         throw SecurityException("ZIP archive exceeds maximum upload size ($MAX_COMPRESSED_ARCHIVE_BYTES bytes)")
+                    }
+                    if (existingStoredBytes + archiveBytes > MAX_TOTAL_PROJECT_LAB_BYTES) {
+                        throw SecurityException("Project Lab storage would exceed the 1 GiB total limit. Remove older project versions before importing more ZIPs.")
                     }
                     output.write(buffer, 0, read)
                     digest.update(buffer, 0, read)
@@ -144,6 +150,9 @@ class ZipWorkspaceManager(private val context: Context) {
                                 if (totalBytesExtracted > MAX_TOTAL_UNCOMPRESSED_BYTES) {
                                     throw SecurityException("Archive uncompressed size exceeds maximum allowance ($MAX_TOTAL_UNCOMPRESSED_BYTES bytes)")
                                 }
+                                if (existingStoredBytes + archiveBytes + totalBytesExtracted > MAX_TOTAL_PROJECT_LAB_BYTES) {
+                                    throw SecurityException("Project Lab storage would exceed the 1 GiB total limit. Remove older project versions before importing more ZIPs.")
+                                }
 
                                 output.write(buffer, 0, len)
                             }
@@ -179,6 +188,19 @@ class ZipWorkspaceManager(private val context: Context) {
             archiveFile.delete()
             Result.failure(e)
         }
+    }
+
+    /** Includes original archives and extracted files in the aggregate Project Lab storage budget. */
+    private fun calculateStoredProjectBytes(excludingWorkspaceId: String): Long {
+        val excludedArchiveName = "$excludingWorkspaceId.zip"
+        val archiveBytes = archivesDir.listFiles().orEmpty()
+            .filter { it.isFile && it.name != excludedArchiveName }
+            .sumOf { it.length() }
+        val excludedRootPrefix = File(workspacesDir, excludingWorkspaceId).absolutePath + File.separator
+        val extractedBytes = workspacesDir.walkTopDown()
+            .filter { it.isFile && !it.absolutePath.startsWith(excludedRootPrefix) }
+            .sumOf { it.length() }
+        return archiveBytes + extractedBytes
     }
 
     /**
@@ -392,31 +414,78 @@ class ZipWorkspaceManager(private val context: Context) {
      * the persisted workspace summary, file inventory, and more chunks than the
      * lightweight chat retrieval path, while remaining safe for model context limits.
      */
+    /**
+     * Builds a fair, bounded context for a project lab containing up to 20 versions.
+     * Every candidate gets a manifest entry before source excerpts are budgeted, so
+     * early ZIPs cannot consume the entire prompt and hide later candidates.
+     */
     fun buildDeepAnalysisContext(
         workspaceIds: List<String>,
         userQuery: String,
         maxChunksPerWorkspace: Int = 24,
         maxTotalChars: Int = 120_000
     ): String {
-        val output = StringBuilder("--- DEEP PROJECT ANALYSIS CONTEXT ---\n")
-        workspaceIds.distinct().forEachIndexed { index, workspaceId ->
-            if (output.length >= maxTotalChars) return@forEachIndexed
-            val root = File(workspacesDir, workspaceId)
-            if (!root.exists()) return@forEachIndexed
-            val summary = analyzeWorkspace(workspaceId, root, "Stored project version ${index + 1}")
-            output.append("\n### PROJECT VERSION ${index + 1} [$workspaceId]\n")
-            output.append("Project type: ${summary.projectType}\n")
-            output.append("Files: ${summary.totalFiles}; directories: ${summary.totalDirectories}; extracted size: ${summary.totalSizeBytes} bytes\n")
-            output.append("Key files: ${summary.keyFiles.joinToString(", ").ifBlank { "none detected" }}\n")
-            output.append("Extensions: ${summary.fileExtensionsDistribution.entries.sortedByDescending { it.value }.take(12).joinToString { ".${it.key}=${it.value}" }}\n")
-            output.append("Archive SHA-256 is available in local metadata; do not infer file contents from the hash.\n")
+        data class VersionContext(
+            val id: String,
+            val index: Int,
+            val root: File,
+            val summary: WorkspaceSummary,
+            val chunks: List<FileChunk>
+        )
 
-            getRelevantWorkspaceChunks(workspaceId, userQuery, maxChunksPerWorkspace).forEach { chunk ->
-                if (output.length >= maxTotalChars) return@forEach
-                output.append("\nFILE ${chunk.filePath} [chunk ${chunk.chunkIndex}/${chunk.totalChunks}]\n")
-                output.append(chunk.content).append('\n')
-            }
+        val ids = workspaceIds.distinct().take(20)
+        val versions = ids.mapIndexedNotNull { index, id ->
+            val root = File(workspacesDir, id)
+            if (!root.isDirectory) return@mapIndexedNotNull null
+            VersionContext(
+                id = id,
+                index = index + 1,
+                root = root,
+                summary = analyzeWorkspace(id, root, "Stored project version ${index + 1}"),
+                chunks = getRelevantWorkspaceChunks(id, userQuery, maxChunksPerWorkspace)
+            )
         }
+
+        val output = StringBuilder("--- PROJECT LAB: FAIR MULTI-VERSION CONTEXT ---\n")
+        output.append("Candidates requested: ${workspaceIds.distinct().size}; candidates analyzed: ${versions.size}; maximum supported: 20.\n")
+        output.append("Evidence excerpts are budgeted per candidate. A missing excerpt is not evidence that a file or feature is absent.\n")
+
+        // First include concise metadata for every candidate, independent of source excerpt budget.
+        versions.forEach { version ->
+            val summary = version.summary
+            output.append("\n### PROJECT VERSION ${version.index}: ${version.id}\n")
+            output.append("Project type: ${summary.projectType}\n")
+            output.append("Files: ${summary.totalFiles}; directories: ${summary.totalDirectories}; size: ${summary.totalSizeBytes} bytes\n")
+            output.append("Key files: ${summary.keyFiles.take(10).joinToString(", ").ifBlank { "none detected" }}\n")
+            output.append("Top extensions: ${summary.fileExtensionsDistribution.entries.sortedByDescending { it.value }.take(8).joinToString { ".${it.key}=${it.value}" }}\n")
+        }
+
+        val remainingBudget = (maxTotalChars - output.length).coerceAtLeast(0)
+        val perVersionBudget = if (versions.isEmpty()) 0 else remainingBudget / versions.size
+
+        versions.forEach { version ->
+            if (output.length >= maxTotalChars) return@forEach
+            val evidence = StringBuilder("\n--- EVIDENCE EXCERPTS: VERSION ${version.index} [${version.id}] ---\n")
+            var includedChunks = 0
+            for (chunk in version.chunks) {
+                val block = "\nFILE ${chunk.filePath} [chunk ${chunk.chunkIndex}/${chunk.totalChunks}]\n${chunk.content}\n"
+                val remainingForVersion = perVersionBudget - evidence.length
+                if (remainingForVersion <= 0) break
+                if (block.length > remainingForVersion) {
+                    if (includedChunks == 0 && remainingForVersion > 120) {
+                        evidence.append(block.take(remainingForVersion - 24))
+                        evidence.append("\n[excerpt truncated to preserve fair version coverage]\n")
+                    }
+                    break
+                }
+                evidence.append(block)
+                includedChunks++
+            }
+            evidence.append("Evidence coverage: ${includedChunks} complete excerpt(s) included from ${version.chunks.size} selected excerpt(s).\n")
+            val room = maxTotalChars - output.length
+            if (room > 0) output.append(evidence.take(room))
+        }
+
         return output.toString().take(maxTotalChars)
     }
 

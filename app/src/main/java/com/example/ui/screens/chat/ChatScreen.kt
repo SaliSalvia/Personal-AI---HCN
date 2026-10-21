@@ -116,6 +116,7 @@ fun ChatScreen(
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val modelRefreshError by viewModel.modelRefreshError.collectAsState()
     val attachments by viewModel.attachments.collectAsState()
+    val projectLabVersionCount = attachments.count { it.isZipWorkspace && it.workspaceId != null }
     val currentTrace by viewModel.currentTrace.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
 
@@ -143,10 +144,13 @@ fun ChatScreen(
         uri?.let { viewModel.attachFileFromUri(context, it) }
     }
 
+    // Multi-select is the primary path for project labs: up to 20 ZIP versions can
+    // be queued in one operation. The ViewModel enforces the cap even if a picker
+    // returns more items than requested.
     val zipLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let { viewModel.attachFileFromUri(context, it) }
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) viewModel.attachZipFilesFromUris(context, uris)
     }
 
     // Jump to the newest entry when a message is added or generation starts.
@@ -318,6 +322,80 @@ fun ChatScreen(
                                     },
                                     enabled = messages.isNotEmpty() && !isGenerating
                                 )
+
+                                // Stage prompts let the user iterate deliberately over the
+                                // same candidate set; each prompt remains editable in the composer.
+                                DropdownMenuItem(
+                                    text = { Text("Project Lab: 1/6 · Inventory & evidence", color = TextPrimary, fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = IceCyanLight, modifier = Modifier.size(16.dp))
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        viewModel.prepareProjectLabStage("inventory")
+                                    },
+                                    enabled = projectLabVersionCount >= 2 && !isGenerating
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Project Lab: 2/6 · Compare versions", color = TextPrimary, fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = IceCyanLight, modifier = Modifier.size(16.dp))
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        viewModel.prepareProjectLabStage("compare")
+                                    },
+                                    enabled = projectLabVersionCount >= 2 && !isGenerating
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Project Lab: 3/6 · Feature matrix", color = TextPrimary, fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = IceCyanLight, modifier = Modifier.size(16.dp))
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        viewModel.prepareProjectLabStage("matrix")
+                                    },
+                                    enabled = projectLabVersionCount >= 2 && !isGenerating
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Project Lab: 4/6 · Golden architecture", color = TextPrimary, fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = IceCyanLight, modifier = Modifier.size(16.dp))
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        viewModel.prepareProjectLabStage("design")
+                                    },
+                                    enabled = projectLabVersionCount >= 2 && !isGenerating
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Project Lab: 5/6 · Merge implementation plan", color = TextPrimary, fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = IceCyanLight, modifier = Modifier.size(16.dp))
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        viewModel.prepareProjectLabStage("plan")
+                                    },
+                                    enabled = projectLabVersionCount >= 2 && !isGenerating
+                                )
+
+                                DropdownMenuItem(
+                                    text = { Text("Project Lab: 6/6 · Validation gate", color = TextPrimary, fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.FolderZip, contentDescription = null, tint = IceCyanLight, modifier = Modifier.size(16.dp))
+                                    },
+                                    onClick = {
+                                        showOptionsMenu = false
+                                        viewModel.prepareProjectLabStage("validate")
+                                    },
+                                    enabled = projectLabVersionCount >= 2 && !isGenerating
+                                )
                             }
                         }
                     },
@@ -376,7 +454,7 @@ fun ChatScreen(
                             onSelectPrompt = { prompt ->
                                 viewModel.onInputChanged(prompt)
                             },
-                            onUploadZip = { zipLauncher.launch("application/zip") }
+                            onUploadZip = { zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) }
                         )
                     } else {
                         LazyColumn(
@@ -426,7 +504,7 @@ fun ChatScreen(
                     selectedModelDisplay = selectedModelDisplay,
                     onOpenModelSelector = { showModelSheet = true },
                     onAttachFile = { genericFileLauncher.launch("*/*") },
-                    onAttachZip = { zipLauncher.launch("application/zip") },
+                    onAttachZip = { zipLauncher.launch(arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")) },
                     onSend = { viewModel.sendMessage() },
                     onStop = { viewModel.stopGeneration() },
                     hasAttachments = attachments.isNotEmpty()

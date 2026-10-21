@@ -39,8 +39,14 @@ class WorkspaceRepository(
             archivePath = summary.archivePath,
             archiveSha256 = summary.archiveSha256
         )
-        workspaceDao.insert(entity)
-        Result.success(summary)
+        try {
+            workspaceDao.insert(entity)
+            Result.success(summary)
+        } catch (error: Exception) {
+            // A Room failure must not leave extracted files or the original archive orphaned.
+            runCatching { zipWorkspaceManager.deleteWorkspace(summary.workspaceId) }
+            Result.failure(error)
+        }
     }
 
     suspend fun getWorkspace(id: String): WorkspaceEntity? = withContext(Dispatchers.IO) {

@@ -70,3 +70,12 @@ Turn SALi-HCNSEC into a trustworthy Android workspace for comparing multiple ZIP
 ## Initial repository observations
 
 The current code already has a ZIP workspace manager, SHA-256 archive fingerprinting, multiple workspace IDs, basic archive limits, project-type heuristics, and a multi-version context path. The next implementation pass should inspect and strengthen the existing manager and retrieval logic rather than replace the architecture wholesale. In particular, the current workflow needs explicit compression-ratio/duplicate-entry handling, durable per-file manifests and deterministic diffs, evidence-aware analysis output, and a reviewable merge pipeline. Actual build/test status must be verified by CI before release readiness is claimed.
+
+
+## Project Lab implementation update (2026-10-17)
+
+The next increment adds a multi-select ZIP workflow capped at 20 project candidates, imports them sequentially to avoid saturating mobile CPU/storage, and preserves successful ZIP candidates in the same chat after each answer so the user can run staged analysis without re-uploading. The aggregate archive-plus-extracted workspace budget is capped at 1 GiB; per-archive safety limits still apply.
+
+The chat menu exposes six editable, user-triggered stages: (1) inventory and evidence, (2) version scorecard, (3) feature/compatibility matrix, (4) golden architecture, (5) reviewable merge plan, and (6) validation/release gate. These prompts are analysis/planning steps, not claims that files were modified. The multi-version context builder now includes a compact manifest for every candidate first and then budgets source excerpts fairly per candidate, preventing early archives from consuming all available context.
+
+Remaining work after this increment: a deterministic all-version file/feature matrix, reviewable patch generation and provenance, applying approved changes into a separate derived workspace, and validating the full workflow with CI and real-device tests. Selected candidate IDs are now persisted per conversation through Room migration 4→5, restored on conversation load, and updated when candidates are removed.
